@@ -1,0 +1,24 @@
+name: Deploy SmartLPR to VM
+
+# สั่งให้ทำงานเมื่อมีการ push โค้ดเข้า branch main
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  deploy:
+    # ระบุว่าให้รันบนเครื่อง VM ของเรา (Self-Hosted Runner)
+    runs-on: self-hosted
+
+    steps:
+      # ขั้นตอนที่ 1: ดึงโค้ดล่าสุดจาก GitHub
+      - name: Pull latest code
+        run: |
+          cd /home/trainee/smartlpr
+          git pull origin main
+
+      # ขั้นตอนที่ 2: รีสตาร์ทและ build container ใหม่
+      - name: Restart containers
+        run: |
+          cd /home/trainee/smartlpr
+          docker compose up -d --build
