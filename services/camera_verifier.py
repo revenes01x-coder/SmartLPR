@@ -59,4 +59,3 @@ async def check_camera_rtsp(rtsp_url: str, timeout_seconds: int = DEFAULT_VERIFY
     except Exception as e:
         logger.warning(f"[Camera Verify] เกิดข้อผิดพลาดขณะตรวจสอบ RTSP: {e}")
         return False
-

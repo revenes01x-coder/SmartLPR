@@ -568,6 +568,12 @@ async def verify_pending_cameras():
                     },
                     actor_type="system",
                 )
+
+                await db.execute(
+                    update(models.WebhookEvent)
+                    .where(models.WebhookEvent.camera_id == cam_id)
+                    .values(camera_id=None)
+                )
                 await db.delete(camera)
                 delete_camera_storage(cam_id)
 

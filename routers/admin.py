@@ -439,9 +439,6 @@ async def verify_all_admin_cameras(
         failed_count=failed_count,
         results=results_list,
     )
-
-
-@router.get("/users", response_model=schemas.PaginatedResponse[schemas.UserAdminResponse])
 async def list_users(
     user_id: Optional[str] = Query(
         default=None,
