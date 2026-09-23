@@ -12,6 +12,7 @@ from smartlpr.database import get_db
 from smartlpr.security import require_admin
 from services.audit_log import log_admin_action
 from services.camera_storage import delete_camera_storage
+from services.camera_verifier import check_camera_rtsp
 from services.email_service import (
     send_access_approved_email,
     send_access_rejected_email,
@@ -347,6 +348,98 @@ async def list_cameras(
         "page_size": page_params.page_size,
         "total_pages": total_pages,
     }
+
+
+@router.post("/cameras/{camera_id}/verify", response_model=schemas.CameraVerificationResult)
+async def verify_admin_camera(
+    camera_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: models.User = Depends(require_admin),
+):
+    """
+    ทดสอบการเชื่อมต่อ RTSP ของกล้องรายตัวแบบ On-Demand
+    อัปเดต verification_status เป็น 'verified' หรือ 'failed' ลงฐานข้อมูล
+    """
+    result = await db.execute(select(models.Camera).filter(models.Camera.id == camera_id))
+    camera = result.scalar_one_or_none()
+    if not camera:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ไม่พบกล้องนี้ในระบบ")
+
+    is_ok = await check_camera_rtsp(camera.rtsp_url, timeout_seconds=5)
+    new_status = "verified" if is_ok else "failed"
+    camera.verification_status = new_status
+    await db.commit()
+
+    message = "เชื่อมต่อ RTSP สำเร็จ" if is_ok else "เชื่อมต่อไม่สำเร็จ"
+    return schemas.CameraVerificationResult(
+        camera_id=camera.id,
+        verification_status=new_status,
+        message=message,
+    )
+
+
+@router.post("/cameras/verify-all", response_model=schemas.CameraBatchVerificationResponse)
+async def verify_all_admin_cameras(
+    payload: Optional[schemas.CameraVerifyBatchRequest] = None,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    admin: models.User = Depends(require_admin),
+):
+    """
+    ทดสอบการเชื่อมต่อ RTSP ของกล้องแบบ On-Demand (Concurrency สูงสุด 5 ตัวพร้อมกัน)
+    สามารถระบุ camera_ids เฉพาะกลุ่มที่ต้องการ หรือถ้าไม่ระบุจะตรวจสอบกล้องทั้งหมดในระบบ
+    อัปเดต verification_status ลงฐานข้อมูล
+    """
+    query = select(models.Camera)
+    if payload and payload.camera_ids:
+        query = query.filter(models.Camera.id.in_(payload.camera_ids))
+
+    result = await db.execute(query)
+    cameras = result.scalars().all()
+
+    if not cameras:
+        return schemas.CameraBatchVerificationResponse(
+            total=0, verified_count=0, failed_count=0, results=[]
+        )
+
+    semaphore = asyncio.Semaphore(5)
+
+    async def _verify_cam(cam: models.Camera):
+        async with semaphore:
+            is_ok = await check_camera_rtsp(cam.rtsp_url, timeout_seconds=5)
+            return cam, is_ok
+
+    verify_results = await asyncio.gather(*(_verify_cam(cam) for cam in cameras))
+
+    verified_count = 0
+    failed_count = 0
+    results_list = []
+
+    for cam, is_ok in verify_results:
+        new_status = "verified" if is_ok else "failed"
+        cam.verification_status = new_status
+        if is_ok:
+            verified_count += 1
+        else:
+            failed_count += 1
+        results_list.append(
+            schemas.CameraVerificationResult(
+                camera_id=cam.id,
+                verification_status=new_status,
+                message="เชื่อมต่อ RTSP สำเร็จ" if is_ok else "เชื่อมต่อไม่สำเร็จ",
+            )
+        )
+
+    await db.commit()
+
+    return schemas.CameraBatchVerificationResponse(
+        total=len(cameras),
+        verified_count=verified_count,
+        failed_count=failed_count,
+        results=results_list,
+    )
+
 
 @router.get("/users", response_model=schemas.PaginatedResponse[schemas.UserAdminResponse])
 async def list_users(

@@ -615,6 +615,23 @@ class MyCameraResponse(BaseModel):
     created_at: datetime
 
 
+class CameraVerificationResult(BaseModel):
+    camera_id: str
+    verification_status: str
+    message: str
+
+
+class CameraBatchVerificationResponse(BaseModel):
+    total: int
+    verified_count: int
+    failed_count: int
+    results: List[CameraVerificationResult]
+
+
+class CameraVerifyBatchRequest(BaseModel):
+    camera_ids: Optional[List[str]] = None
+
+
 # ---- สำหรับ Partner Integration — ระบบพาร์ทเนอร์สั่งเปิด/ปิดกล้อง (ดู routers/partner.py) ----
 class PartnerCameraStatusUpdate(BaseModel):
     camera_id: str = Field(..., min_length=1, max_length=100)

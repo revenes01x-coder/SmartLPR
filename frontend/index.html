@@ -2759,6 +2759,10 @@
         <div class="panel-head" style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 10px;">
           <div><h2>รายการกล้อง</h2><div class="sub" id="admin-cam-sub">—</div></div>
           <div style="display: flex; gap: 10px; align-items: center; margin-left: auto;">
+            <button type="button" class="btn btn-xs btn-primary" id="admin-cam-verify-all-btn" onclick="reverifyAllAdminCameras()" title="ตรวจสอบการเชื่อมต่อทั้งหมด" style="height: 34px; padding: 0 14px; font-size: 13px;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;margin-right:4px;"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+              ตรวจสอบการเชื่อมต่อ
+            </button>
             <div class="search-field has-clear" style="width:260px;">
               <button type="button" class="icon-btn" onclick="applyAdminCameraFilter()" aria-label="ค้นหา">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -4642,7 +4646,7 @@ async function confirmWebhookDelete() {
 function cameraIcon() {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>`;
 }
-function verifyLabel(s) { return { pending: 'กำลังตรวจสอบ RTSP', verified: 'เชื่อมต่อ RTSP สำเร็จ', failed: 'ต่อ RTSP ไม่สำเร็จ' }[s] || s; }
+function verifyLabel(s) { return { pending: 'กำลังตรวจสอบ...', verified: 'เชื่อมต่อ RTSP สำเร็จ', failed: 'เชื่อมต่อไม่สำเร็จ' }[s] || s; }
 function verifyCls(s) { return { pending: 'pending', verified: 'up', failed: 'down' }[s] || 'pending'; }
 
 function toggleSort(elId, applyFuncStr) {
@@ -6025,6 +6029,58 @@ function openAdminCameraModal(id) {
   document.getElementById('adminCameraModal').classList.remove('hidden');
 }
 
+async function reverifyAdminCamera(cameraId) {
+  const cell = document.getElementById(`admin-cam-verify-${cameraId}`);
+  if (cell) cell.textContent = 'กำลังตรวจสอบ...';
+  try {
+    const res = await apiCall(`/admin/cameras/${encodeURIComponent(cameraId)}/verify`, { method: 'POST' });
+    if (adminCamItemsById[cameraId]) {
+      adminCamItemsById[cameraId].verification_status = res.verification_status;
+    }
+    if (cell) cell.textContent = verifyLabel(res.verification_status);
+    showToast(`กล้อง ${cameraId}: ${verifyLabel(res.verification_status)}`, res.verification_status === 'verified' ? 'success' : 'danger');
+  } catch (e) {
+    if (cell) cell.textContent = 'เชื่อมต่อไม่สำเร็จ';
+    showToast(`กล้อง ${cameraId}: ไม่สามารถตรวจสอบได้ (${e.message || 'ข้อผิดพลาด'})`, 'danger');
+  }
+}
+
+async function reverifyAllAdminCameras() {
+  const btn = document.getElementById('admin-cam-verify-all-btn');
+  const originalHtml = btn ? btn.innerHTML : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'กำลังตรวจสอบ...';
+  }
+
+  const visibleIds = Object.keys(adminCamItemsById);
+  visibleIds.forEach(id => {
+    const cell = document.getElementById(`admin-cam-verify-${id}`);
+    if (cell) cell.textContent = 'กำลังตรวจสอบ...';
+  });
+
+  try {
+    const payload = visibleIds.length ? { camera_ids: visibleIds } : null;
+    const res = await apiCall('/admin/cameras/verify-all', { method: 'POST', json: payload });
+    (res.results || []).forEach(r => {
+      if (adminCamItemsById[r.camera_id]) {
+        adminCamItemsById[r.camera_id].verification_status = r.verification_status;
+      }
+      const cell = document.getElementById(`admin-cam-verify-${r.camera_id}`);
+      if (cell) cell.textContent = verifyLabel(r.verification_status);
+    });
+    showToast(`ตรวจสอบเสร็จสิ้น: สำเร็จ ${res.verified_count || 0}, ไม่สำเร็จ ${res.failed_count || 0}`, res.failed_count === 0 ? 'success' : 'warn');
+  } catch (e) {
+    showToast(`ตรวจสอบไม่สำเร็จ: ${e.message || 'เกิดข้อผิดพลาด'}`, 'danger');
+    loadAdminCameras(adminCamPage);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+    }
+  }
+}
+
 async function loadAdminCameras(page = adminCamPage) {
   adminCamPage = page;
   const tbody = document.getElementById('admin-cam-tbody');
@@ -6073,9 +6129,12 @@ async function loadAdminCameras(page = adminCamPage) {
         <td class="id-cell">${escapeHtml(c.camera_id)}</td>
         <td class="id-cell">${escapeHtml(c.owner_email)}</td>
         <td><span class="url-cell" title="${escapeHtml(c.rtsp_url)}">${escapeHtml(c.rtsp_url)}</span></td>
-        <td>${verifyLabel(c.verification_status)}</td>
+        <td id="admin-cam-verify-${escapeHtml(c.camera_id)}">${verifyLabel(c.verification_status)}</td>
         <td>${badgeHtml}</td>
-        <td><button class="btn btn-xs btn-icon" onclick="openAdminCameraModal('${c.camera_id}')" title="ดูรายละเอียด" aria-label="ดูรายละเอียด"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></td>
+        <td style="white-space:nowrap;">
+          <button class="btn btn-xs btn-icon" onclick="reverifyAdminCamera('${escapeHtml(c.camera_id)}')" title="ตรวจสอบการเชื่อมต่อ" aria-label="ตรวจสอบการเชื่อมต่อ" style="margin-right:4px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
+          <button class="btn btn-xs btn-icon" onclick="openAdminCameraModal('${escapeHtml(c.camera_id)}')" title="ดูรายละเอียด" aria-label="ดูรายละเอียด"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+        </td>
       </tr>`;
     }).join('');
     renderPagination('admin-cam-pagination', res.page, res.total_pages, 'loadAdminCameras');
