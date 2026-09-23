@@ -2,9 +2,6 @@ import asyncio
 import uuid
 import logging
 import httpx
-import os
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
-import cv2
 from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, update, delete
@@ -14,9 +11,9 @@ from smartlpr.database import SessionLocal
 from services.email_service import send_webhook_endpoint_unhealthy_email
 from services.audit_log import log_admin_action
 from services.camera_storage import delete_camera_storage, prune_orphaned_camera_storage
+from services.camera_verifier import check_camera_rtsp
 from smartlpr.config import (UNVERIFIED_USER_EXPIRE_HOURS, PLATE_DATA_RETENTION_DAYS, OTP_RETENTION_DAYS, ADMIN_AUDIT_LOG_RETENTION_DAYS)
 from security.ssrf_guard import build_pinned_request, build_test_webhook_payload
-from security.camera_url_guard import resolve_rtsp_url_pinned
 from security.ip_guard import SSRFBlockedError
 
 RETRY_DELAYS = {1: 3, 2: 5, 3: 10}
@@ -452,50 +449,13 @@ async def process_graveyard_resume(endpoint_ids: list[int] | None = None):
         await db.close()
 
 
-def _try_open_rtsp(rtsp_url: str) -> bool:
-    """
-    เรียกใน thread แยก (blocking call จริง) — ลอง connect RTSP แล้วอ่านเฟรม
-    [SSRF Guard]: pin IP ก่อน connect เสมอ (resolve_rtsp_url_pinned) กัน DNS rebinding
-    (ไม่แตะ DB เลย ยังเป็น sync function ตามเดิม — worker.py เรียกผ่าน asyncio.to_thread)
-    """
-    try:
-        pinned_url = resolve_rtsp_url_pinned(rtsp_url)
-    except SSRFBlockedError as e:
-        logging.warning(f"[SSRF Guard] ปฏิเสธการตรวจสอบ RTSP: {e}")
-        return False
-
-    cap = None
-    try:
-        cap = cv2.VideoCapture(pinned_url)
-        if not cap.isOpened():
-            return False
-
-        for _ in range(3):
-            ret, frame = cap.read()
-            if ret and frame is not None:
-                return True
-        return False
-    except Exception as e:
-        logging.warning(f"[Camera Verify] เปิด RTSP ผิดพลาด: {e}")
-        return False
-    finally:
-        if cap is not None:
-            cap.release()
-
-
 async def _verify_one_camera_rtsp(camera: models.Camera) -> tuple[models.Camera, bool]:
     """เช็ค RTSP กล้องตัวเดียว (ไม่แตะ DB เลย) — คืน (camera, is_ok) ให้ caller เอาไปอัปเดต DB
     เองแบบ sequential ทีหลัง (AsyncSession ตัวเดียวกันเขียนพร้อมกันหลาย coroutine ไม่ได้ —
     เหตุผลเดียวกับ comment เรื่อง half-async trap ใน _notify_endpoints_tripped ด้านบน)
     ตัว timeout ยังเป็น per-camera เหมือนเดิม (CAMERA_VERIFY_TIMEOUT_SECONDS) — แค่หลายตัว
     รันพร้อมกันได้แล้วผ่าน semaphore ของ caller (_verify_with_semaphore) แทนที่จะรอกันทีละตัว"""
-    try:
-        is_ok = await asyncio.wait_for(
-            asyncio.to_thread(_try_open_rtsp, camera.rtsp_url),
-            timeout=CAMERA_VERIFY_TIMEOUT_SECONDS,
-        )
-    except asyncio.TimeoutError:
-        is_ok = False
+    is_ok = await check_camera_rtsp(camera.rtsp_url, timeout_seconds=CAMERA_VERIFY_TIMEOUT_SECONDS)
     return camera, is_ok
 
 

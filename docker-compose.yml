@@ -30,6 +30,7 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://${DB_USER:-smartlpr_user}:${DB_PASSWORD:-smartlpr_password}@db:5432/${DB_NAME:-smartlpr_db}
       - TZ=Asia/Bangkok
+      - ROOT_PATH=/api
     # [DEV MODE] เปิด Hot-Reload ให้ FastAPI สังเกตการแก้ไฟล์
     command: ["uvicorn", "smartlpr.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     volumes:

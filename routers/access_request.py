@@ -8,6 +8,7 @@ import smartlpr.schemas as schemas
 from smartlpr.database import get_db
 from smartlpr.security import get_current_user, require_terms_accepted
 from smartlpr.pagination import PageParams, paginate
+from services.rate_limiter import check_rate_limit
 
 router = APIRouter(prefix="/access-request", tags=["Access Request"])
 
@@ -58,7 +59,7 @@ async def submit_access_request(
     await db.refresh(new_request)
     return new_request
 
-from services.rate_limiter import check_rate_limit
+
 
 @router.put("/update-pending", response_model=schemas.AccessRequestResponse)
 async def update_pending_request(
@@ -114,9 +115,3 @@ async def my_access_requests(
         query = query.order_by(models.AccessRequest.id.desc())
 
     return await paginate(db, query, page_params)
-from sqlalchemy import text
-@router.get("/temp-drop-email")
-async def temp_drop_email(db: AsyncSession = Depends(get_db)):
-    await db.execute(text("ALTER TABLE access_requests DROP COLUMN IF EXISTS contact_email;"))
-    await db.commit()
-    return {"status": "ok"}

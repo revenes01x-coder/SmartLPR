@@ -1,7 +1,6 @@
 import sys
 import torch
 import torch.nn.functional as F
-from PIL import Image
 import numpy as np
 import cv2
 
@@ -27,7 +26,7 @@ if _missing:
 sys.path.insert(0, PLATE_DETECTION_REPO_PATH)
 
 from model import Model
-from utils import CTCLabelConverter, AttnLabelConverter
+from utils import AttnLabelConverter
 
 MODEL_PATH = PLATE_OCR_MODEL_PATH
 CHAR_FILE = PLATE_OCR_CHAR_FILE

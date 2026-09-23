@@ -221,7 +221,6 @@ async def _create_and_send_otp(db: AsyncSession, user: models.User, purpose: str
         if purpose == PASSWORD_RESET_PURPOSE:
             send_password_reset_otp_email(email_to_send, otp_plain)
         elif purpose == CHANGE_EMAIL_PURPOSE:
-            from services.email_service import send_email_change_otp_email
             send_email_change_otp_email(email_to_send, otp_plain)
         else:
             send_otp_email(email_to_send, otp_plain)

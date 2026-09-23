@@ -90,7 +90,13 @@ async def lifespan(app: FastAPI):
     print(" กำลังปิดระบบและหยุดการทำงานของ Worker...")
     scheduler.shutdown()
 
-app = FastAPI(lifespan=lifespan, title="SmartLPR Webhook System")
+ROOT_PATH = os.getenv("ROOT_PATH", "/api")
+
+app = FastAPI(
+    lifespan=lifespan,
+    title="SmartLPR Webhook System",
+    root_path=ROOT_PATH,
+)
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
@@ -102,8 +108,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 # ---------------------------------------------------------------------------
 # CORS — อนุญาตให้หน้า static (index.html ที่รันแยกด้วย `python -m http.server`
-# บน origin คนละพอร์ตกับ backend นี้) เรียก fetch() เข้ามาได้
-# ถ้า deploy หน้าเว็บที่ domain/พอร์ตอื่น ต้องมาแก้ allow_origins ให้ตรงด้วย
+# บน origin คนละพอร์ตกับ backend นี้) รวมถึงเครื่องในวง LAN เข้าถึงได้
 # ---------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
@@ -112,6 +117,7 @@ app.add_middleware(
         "http://127.0.0.1:8080",
         "null",
     ],
+    allow_origin_regex=r"^https?://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

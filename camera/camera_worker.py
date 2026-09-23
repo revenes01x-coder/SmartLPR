@@ -2,8 +2,6 @@ import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"   # ซ่อน log ของ TensorFlow (INFO/WARNING/oneDNN ฯลฯ)
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"  # กัน warning เรื่อง oneDNN round-off เฉยๆ
 os.environ["YOLO_VERBOSE"] = "False"       # ซ่อน banner/log ของ Ultralytics ตอนโหลดโมเดล
-# บังคับใช้ TCP ลดปัญหา packet drop + ปิด Buffer ในระดับ FFmpeg (Zero-Buffer) + โหมด Low Delay
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay"
 
 import re
 import time
@@ -21,8 +19,6 @@ import numpy as np
 import requests
 from ultralytics import YOLO
 from camera.plate_ocr import predict as ocr_predict
-from security.camera_url_guard import resolve_rtsp_url_pinned
-from security.ip_guard import SSRFBlockedError
 
 from smartlpr.config import (
     PLATE_YOLO_MODEL_PATH,
@@ -32,7 +28,6 @@ from smartlpr.config import (
     CAPTURES_SAVE_DIR,
     CAPTURE_EVENT_WEBHOOK_URL,
     CAPTURE_EVENT_SECRET,   # [Internal Auth] secret กลาง ยิงคู่กับ backend ผ่าน header
-    CAMERA_DETECTION_FPS,
 )
 
 import tensorflow as tf
@@ -69,9 +64,7 @@ MIN_ASPECT_RATIO = 0.8
 MIN_WIDTH        = 50
 RESIZE_FACTOR    = 3
 PADDING          = 10
-RECONNECT_SEC    = 10   # วินาทีที่รอก่อน reconnect กล้อง
 OCR_MIN_CONFIDENCE = 0.9
-DETECTION_FPS    = float(CAMERA_DETECTION_FPS or 5.0)  # จำกัดความถี่การรัน AI ตรวจจับ (ดีฟอลต์ 5 FPS)
 # ============================================================
 
 THAI_PROVINCES = [
@@ -249,18 +242,6 @@ def read_plate(plate_crop, enhanced_gray, logger):
     return plate_part, province_part, confidence
 
 
-def _setup_logger(camera_id: str) -> logging.Logger:
-    os.makedirs("logs", exist_ok=True)
-    logger = logging.getLogger(f"camera_{camera_id}")
-    logger.setLevel(logging.INFO)
-    # กัน handler ซ้ำถ้า process ถูก restart แล้วเรียก run() ใหม่ในตัวเดิม (ปกติไม่เกิดเพราะเป็น process ใหม่ทุกครั้ง)
-    if not logger.handlers:
-        handler = logging.FileHandler(f"logs/camera_{camera_id}.log", encoding="utf-8")
-        handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-        logger.addHandler(handler)
-    return logger
-
-
 def send_to_webhook(camera_id, path_full, path_crop, plate, province, color, ts_display, logger, event_id=None, is_update=False):
     try:
         data = {
@@ -341,277 +322,6 @@ def save_capture(camera_id, frame, plate_crop, plate, province, color, save_dir_
             save_dir_full, save_dir_crop, logger,
             event_id, is_update,
         )
-
-
-def open_stream(url, logger):
-    """เปิด RTSP stream ด้วย IP ที่ resolve + เช็คแล้วเท่านั้น (pin IP กัน DNS rebinding)
-
-    เหตุผลที่ต้อง "แทน IP ตรงๆ ใน URL" ก่อนส่งให้ cv.VideoCapture แทนที่จะแค่เช็คแล้วปล่อยผ่าน
-    hostname เดิม: cv.VideoCapture เปิด RTSP ผ่าน FFmpeg (C library) ซึ่ง resolve DNS เองอีกรอบ
-    ไม่ผ่าน Python เลย ต่อให้ฝั่ง Python เช็คแล้วว่า IP ปลอดภัย ก็ไม่การันตีว่า FFmpeg จะได้ IP
-    เดียวกัน (ดู camera_url_guard.resolve_rtsp_url_pinned สำหรับรายละเอียดเต็ม)
-
-    คืน None ถ้า host ไม่ผ่านการตรวจสอบ (SSRF) หรือ resolve ไม่ได้ — caller (_open_stream_with_retry)
-    จะรอแล้ว retry เอง เหมือนเวลา stream ต่อไม่ติดด้วยเหตุผลอื่น ไม่ crash process ทิ้ง"""
-    try:
-        pinned_url = resolve_rtsp_url_pinned(url)
-    except SSRFBlockedError as e:
-        logger.warning(f"[SSRF Guard] ปฏิเสธการเชื่อมต่อ RTSP: {e}")
-        return None
-
-    cap = cv.VideoCapture(pinned_url)
-    if not cap.isOpened():
-        cap.release()
-        return None
-    cap.set(cv.CAP_PROP_BUFFERSIZE, 1)
-    return cap
-
-
-def _open_stream_with_retry(rtsp_url, logger):
-    """เรียก open_stream() วนซ้ำจนกว่าจะสำเร็จ (ไม่ปล่อย None ออกไปให้ caller เห็นเลย)
-    ใช้ทั้งตอนเริ่ม process ครั้งแรกและตอน reconnect หลัง stream หลุด — ถ้าถูก SSRF guard ปฏิเสธ
-    (เช่น rtsp_url โดน DNS rebinding ไปชี้ IP ภายในแล้ว) จะวนรอเหมือนกรณี stream ต่อไม่ติดปกติ
-    ไม่ crash หรือหยุดทำงานไปเฉยๆ"""
-    cap = open_stream(rtsp_url, logger)
-    while cap is None:
-        logger.warning(f"เชื่อมต่อ RTSP ไม่ได้ (URL ไม่ผ่าน SSRF guard หรือต่อไม่ติด) — รอ {RECONNECT_SEC} วินาทีแล้วลองใหม่...")
-        time.sleep(RECONNECT_SEC)
-        cap = open_stream(rtsp_url, logger)
-    return cap
-
-
-class RealtimeVideoStream:
-    """
-    RTSP Stream Reader แบบ Real-time (Zero-Latency)
-    แยก Capture Thread ดึงภาพ cap.read() อย่างต่อเนื่องเพื่อระบาย Buffer ของ FFmpeg และ OS Socket ทิ้งตลอดเวลา
-    และเก็บเฉพาะภาพเฟรมล่าสุด (Latest Frame) ไว้ให้ AI ประมวลผล ทำให้ไม่มีปัญหาดีเลย์สะสม
-    """
-    def __init__(self, rtsp_url: str, logger: logging.Logger):
-        self.rtsp_url = rtsp_url
-        self.logger = logger
-        self.cap = None
-        self.frame = None
-        self.ret = False
-        self.running = False
-        self.lock = threading.Lock()
-        self.thread = None
-        self._start()
-
-    def _start(self):
-        self.cap = _open_stream_with_retry(self.rtsp_url, self.logger)
-        ret, frame = self.cap.read()
-        if ret and frame is not None:
-            self.frame = frame
-            self.ret = True
-        self.running = True
-        self.thread = threading.Thread(target=self._capture_worker, daemon=True)
-        self.thread.start()
-
-    def _capture_worker(self):
-        while self.running:
-            if self.cap is None or not self.cap.isOpened():
-                with self.lock:
-                    self.ret = False
-                if self.cap:
-                    try:
-                        self.cap.release()
-                    except Exception:
-                        pass
-                    self.cap = None
-
-                self.logger.warning(f"RTSP หลุดการเชื่อมต่อ — รอ {RECONNECT_SEC} วินาทีแล้ว reconnect...")
-                time.sleep(RECONNECT_SEC)
-                if not self.running:
-                    break
-                self.cap = open_stream(self.rtsp_url, self.logger)
-                if self.cap and self.cap.isOpened():
-                    self.logger.info("เชื่อมต่อ RTSP สำเร็จ กำลังรับภาพต่อ...")
-                continue
-
-            ret, frame = self.cap.read()
-            if not ret or frame is None:
-                with self.lock:
-                    self.ret = False
-                self.logger.warning(f"Stream หลุด (อ่านเฟรมไม่สำเร็จ) — รอ {RECONNECT_SEC} วินาทีแล้ว reconnect...")
-                if self.cap:
-                    try:
-                        self.cap.release()
-                    except Exception:
-                        pass
-                    self.cap = None
-                time.sleep(RECONNECT_SEC)
-                if not self.running:
-                    break
-                self.cap = open_stream(self.rtsp_url, self.logger)
-                if self.cap and self.cap.isOpened():
-                    self.logger.info("เชื่อมต่อ RTSP สำเร็จ กำลังรับภาพต่อ...")
-                continue
-
-            with self.lock:
-                self.frame = frame
-                self.ret = True
-
-    def read(self):
-        """คืนค่า (ret, frame) ของภาพสดใหม่ล่าสุด (Thread-safe)"""
-        with self.lock:
-            if not self.ret or self.frame is None:
-                return False, None
-            return True, self.frame.copy()
-
-    def release(self):
-        self.running = False
-        if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=1.0)
-        if self.cap:
-            try:
-                self.cap.release()
-            except Exception:
-                pass
-            self.cap = None
-
-
-def run(camera_id: str, rtsp_url: str, delay: int = 1):
-    """
-    Entry point ที่ camera_manager.py เรียกผ่าน
-    multiprocessing.Process(target=run, args=(camera_id, rtsp_url, delay))
-    ฟังก์ชันนี้ loop ไม่มีวันจบ (จบก็ต่อเมื่อ process ถูก terminate จาก manager)
-    """
-    logger = _setup_logger(camera_id)
-
-    save_dir_full = os.path.join(SAVE_DIR_ROOT, f"camera_{camera_id}", "full")
-    save_dir_crop = os.path.join(SAVE_DIR_ROOT, f"camera_{camera_id}", "crop")
-    os.makedirs(save_dir_full, exist_ok=True)
-    os.makedirs(save_dir_crop, exist_ok=True)
-
-    logger.info("กำลังโหลด YOLO model (ป้ายทะเบียน)...")
-    yolo_model = YOLO(YOLO_MODEL_PATH)
-
-    logger.info("กำลังโหลด YOLO model (ตรวจจับรถทั้งคัน)...")
-    car_detector = YOLO(CAR_DETECTOR_MODEL_PATH)
-
-    logger.info("กำลังโหลดโมเดลแยกสีรถ...")
-    color_model = tf.keras.models.load_model(COLOR_MODEL_PATH)
-    with open(COLOR_CLASSNAMES_PATH, "r", encoding="utf-8") as f:
-        color_class_names = json.load(f)
-
-    logger.info(f"เชื่อมต่อ RTSP: {rtsp_url}")
-    stream = RealtimeVideoStream(rtsp_url, logger)
-    io_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix=f"cam_io_{camera_id}")
-
-    recent_plates: dict[str, float] = {}  # {plate: เวลา (time.time()) ล่าสุดที่เจอป้ายนี้} — กันตรวจจับซ้ำสำหรับทะเบียนเดิมตาม delay
-    last_cleanup_time = time.time()
-    last_detection_time = 0.0
-    detection_interval = 1.0 / max(0.5, float(DETECTION_FPS))
-
-    logger.info(
-        f"เริ่มทำงานแบบ Real-time (กล้อง: {camera_id}, delay ทะเบียนเดิม: {delay} วินาที, "
-        f"detection: {DETECTION_FPS} FPS)"
-    )
-
-    try:
-        while True:
-            ret, frame = stream.read()
-
-            if not ret or frame is None:
-                time.sleep(0.05)
-                continue
-
-            now = time.time()
-
-            # [Frame Throttling]: ตรวจสอบว่าถึงรอบการรัน AI ตรวจจับหรือยัง (จำกัดตาม DETECTION_FPS)
-            # หากยังไม่ถึงรอบ ให้พักสั้นๆ เพื่อไม่ให้ CPU หมุนฟรี แล้ววนกลับไปอ่านเฟรมสดถัดไป
-            if (now - last_detection_time) < detection_interval:
-                sleep_time = max(0.005, min(0.03, detection_interval - (now - last_detection_time)))
-                time.sleep(sleep_time)
-                continue
-
-            last_detection_time = now
-            h_frame, w_frame = frame.shape[:2]
-
-            # ขั้นที่ 1: หา "รถ/มอเตอร์ไซค์" ทั้งเฟรมก่อน ด้วย YOLO pretrained (COCO)
-            car_results = car_detector(frame, verbose=False)
-
-            for car_result in car_results:
-                for car_box_raw in car_result.boxes:
-                    cls_id = int(car_box_raw.cls[0])
-                    if cls_id not in CAR_CLASS_IDS:
-                        continue
-
-                    cx1, cy1, cx2, cy2 = map(int, car_box_raw.xyxy[0])
-                    car_w, car_h = cx2 - cx1, cy2 - cy1
-
-                    # ขยายกรอบรถแบบสัดส่วน ก่อนไปหาป้าย กันป้ายโดนตัดขาดถ้าอยู่ขอบกรอบพอดี
-                    pad_x = int(car_w * CAR_BOX_EXPAND_RATIO)
-                    pad_y = int(car_h * CAR_BOX_EXPAND_RATIO)
-                    ex1 = max(0, cx1 - pad_x)
-                    ey1 = max(0, cy1 - pad_y)
-                    ex2 = min(w_frame, cx2 + pad_x)
-                    ey2 = min(h_frame, cy2 + pad_y)
-
-                    car_crop = frame[ey1:ey2, ex1:ex2]
-                    if car_crop.size == 0:
-                        continue
-
-                    # ขั้นที่ 2: หาป้ายทะเบียน "เฉพาะในกรอบรถ" ด้วย YOLO ที่เทรนเอง
-                    # ตัดปัญหาไปจับป้ายอื่นที่ไม่ใช่ของรถคันนี้
-                    plate_results = yolo_model(car_crop, verbose=False)
-
-                    valid_plates = []
-                    for plate_result in plate_results:
-                        for pbox in plate_result.boxes:
-                            px1, py1, px2, py2 = map(int, pbox.xyxy[0])
-                            conf = pbox.conf[0].item()
-                            width, height = px2 - px1, py2 - py1
-                            aspect = width / height if height > 0 else 0
-
-                            if aspect < MIN_ASPECT_RATIO or width < MIN_WIDTH:
-                                continue
-                            if conf <= YOLO_CONF:
-                                continue
-
-                            valid_plates.append((px1, py1, px2, py2, conf))
-
-                    if not valid_plates:
-                        continue  # รถคันนี้ไม่เจอป้าย ข้ามไปเลย ไม่เสียเวลาทายสี
-
-                    # ขั้นที่ 3: ทายสีรถ — ทำเฉพาะตอนเจอป้ายแล้วเท่านั้น (ประหยัดเวลา)
-                    color = detect_car_color(color_model, color_class_names, car_crop, logger)
-
-                    for px1, py1, px2, py2, plate_conf in valid_plates:
-                        plate_crop, enhanced_gray = preprocess_plate(car_crop, px1, py1, px2, py2)
-                        plate, province, ocr_conf = read_plate(plate_crop, enhanced_gray, logger)
-
-                        if plate:
-                            # [กันจับซ้ำทะเบียนเดิม]: อิงตามเวลา delay ที่ user ตั้งมา (วินาที)
-                            last_seen = recent_plates.get(plate)
-                            if last_seen is not None and (now - last_seen) < delay:
-                                logger.info(
-                                    f"ข้ามป้าย {plate} — ซ้ำกับที่เพิ่งบันทึกไป "
-                                    f"{now - last_seen:.1f} วิ ก่อนหน้า (ยังไม่ครบ delay {delay} วิ)"
-                                )
-                                continue
-
-                            recent_plates[plate] = now
-                            logger.info(
-                                f"เจอป้าย: {plate} {province} | สี: {color} | "
-                                f"ความมั่นใจ: OCR {ocr_conf * 100:.1f}%, ตรวจจับป้าย {plate_conf * 100:.1f}%"
-                            )
-                            save_capture(
-                                camera_id, frame, plate_crop, plate, province, color,
-                                save_dir_full, save_dir_crop, logger, io_executor=io_executor,
-                            )
-
-            # [ล้างแคชป้ายเก่า]: ล้าง entry ที่พ้นระยะ delay ไปแล้วทุกๆ 60 วินาที เพื่อไม่ให้ recent_plates โตขึ้นเรื่อยๆ
-            if (now - last_cleanup_time) > 60:
-                if recent_plates:
-                    recent_plates = {
-                        p: t for p, t in recent_plates.items()
-                        if now - t < delay
-                    }
-                last_cleanup_time = now
-    finally:
-        stream.release()
-        io_executor.shutdown(wait=False)
 
 
 # --- Best-Shot Selection & Fuzzy Matching Config ---
