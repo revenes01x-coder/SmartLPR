@@ -14,7 +14,8 @@ jobs:
       - name: Pull latest code
         run: |
           cd /home/trainee/smartlpr
-          git pull origin main
+          git fetch origin main
+          git reset --hard origin/main
 
       # ขั้นตอนที่ 2: รีสตาร์ทและ build container ใหม่
       - name: Restart containers
