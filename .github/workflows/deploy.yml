@@ -7,7 +7,6 @@ on:
 
 jobs:
   deploy:
-    # ระบุว่าให้รันบนเครื่อง VM ของเรา (Self-Hosted Runner)
     runs-on: self-hosted
 
     steps:
@@ -22,3 +21,4 @@ jobs:
         run: |
           cd /home/trainee/smartlpr
           docker compose up -d --build
+          docker compose restart frontend
