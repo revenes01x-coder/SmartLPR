@@ -1,14 +1,12 @@
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from smartlpr import models
 import smartlpr.schemas as schemas
 from smartlpr.database import get_db
 from smartlpr.security import get_current_user, require_terms_accepted
-from smartlpr.pagination import PageParams, paginate
-from services.rate_limiter import check_rate_limit
+from smartlpr.pagination import PageParams
+from services import access_request_service
 
 router = APIRouter(prefix="/access-request", tags=["Access Request"])
 
@@ -20,45 +18,11 @@ async def submit_access_request(
     # ต้องผ่าน require_terms_accepted ก่อนเสมอ (login -> terms -> access-request)
     current_user: models.User = Depends(require_terms_accepted),
 ):
-    already_approved_result = await db.execute(
-        select(models.AccessRequest).filter(
-            models.AccessRequest.user_id == current_user.id,
-            models.AccessRequest.status == "approved",
-        )
+    return await access_request_service.submit_access_request(
+        payload=payload,
+        db=db,
+        current_user=current_user,
     )
-    already_approved = already_approved_result.scalar_one_or_none()
-    if already_approved:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="คุณได้รับอนุมัติให้ใช้งานระบบนี้ไปแล้ว ไม่จำเป็นต้องส่งคำขอใหม่",
-        )
-
-    existing_pending_result = await db.execute(
-        select(models.AccessRequest).filter(
-            models.AccessRequest.user_id == current_user.id,
-            models.AccessRequest.status == "pending",
-        )
-    )
-    existing_pending = existing_pending_result.scalar_one_or_none()
-    if existing_pending:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="คุณมีคำขอที่รอการอนุมัติอยู่แล้ว กรุณารอผลก่อนส่งคำขอใหม่",
-        )
-
-    new_request = models.AccessRequest(
-        user_id=current_user.id,
-        organization_name=payload.organization_name,
-        use_case=payload.use_case,
-        contact_phone=payload.contact_phone,
-        contact_name=payload.contact_name,
-        status="pending",
-    )
-    db.add(new_request)
-    await db.commit()
-    await db.refresh(new_request)
-    return new_request
-
 
 
 @router.put("/update-pending", response_model=schemas.AccessRequestResponse)
@@ -67,36 +31,12 @@ async def update_pending_request(
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(require_terms_accepted),
 ):
-    await check_rate_limit(
-        db, 
-        f"update_pending_request_{current_user.id}", 
-        "update_pending_request", 
-        limit=5, 
-        window_minutes=30
+    return await access_request_service.update_pending_request(
+        payload=payload,
+        db=db,
+        current_user=current_user,
     )
 
-    existing_pending_result = await db.execute(
-        select(models.AccessRequest).filter(
-            models.AccessRequest.user_id == current_user.id,
-            models.AccessRequest.status == "pending",
-        )
-    )
-    existing_pending = existing_pending_result.scalar_one_or_none()
-    
-    if not existing_pending:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="ไม่พบคำขอที่กำลังรอการอนุมัติ (หรือคำขอนี้ถูกอนุมัติ/ปฏิเสธไปแล้ว)",
-        )
-
-    existing_pending.organization_name = payload.organization_name
-    existing_pending.use_case = payload.use_case
-    existing_pending.contact_phone = payload.contact_phone
-    existing_pending.contact_name = payload.contact_name
-
-    await db.commit()
-    await db.refresh(existing_pending)
-    return existing_pending
 
 @router.get("/my-status", response_model=schemas.PaginatedResponse[schemas.AccessRequestResponse])
 async def my_access_requests(
@@ -105,13 +45,9 @@ async def my_access_requests(
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    query = (
-        select(models.AccessRequest)
-        .filter(models.AccessRequest.user_id == current_user.id)
+    return await access_request_service.my_access_requests(
+        order=order,
+        page_params=page_params,
+        db=db,
+        current_user=current_user,
     )
-    if order == "asc":
-        query = query.order_by(models.AccessRequest.id.asc())
-    else:
-        query = query.order_by(models.AccessRequest.id.desc())
-
-    return await paginate(db, query, page_params)
