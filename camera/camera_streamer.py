@@ -14,6 +14,31 @@ from smartlpr.config import CAMERA_DETECTION_FPS
 RECONNECT_SEC = 10
 DETECTION_FPS = float(CAMERA_DETECTION_FPS or 5.0)
 
+# Timeout ของ FFmpeg ตอนเปิด RTSP และตอนอ่านเฟรม (มิลลิวินาที) — เดิมไม่ได้ตั้ง ทำให้ VideoCapture()
+# กับ cap.read() ค้างได้นานมาก (กล้องออฟไลน์/สตรีมเงียบ) จน streamer หยุดตัวไม่ทันเวลาที่ camera_manager
+# รอ (GRACEFUL_STOP_TIMEOUT_SECONDS) แล้วโดน kill -> ต้องรีสตาร์ท AI worker ทั้งชุดโดยไม่จำเป็น
+OPEN_TIMEOUT_MS = 5000
+READ_TIMEOUT_MS = 5000
+
+
+def _wait_or_stop(stop_event, seconds: float) -> bool:
+    """รอ seconds วินาที แต่ตื่นทันทีถ้าถูกสั่งหยุด — คืน True ถ้าถูกสั่งหยุด
+    (แทน time.sleep ที่ไม่เห็น stop_event เลยตลอดช่วงที่หลับอยู่)"""
+    if stop_event is None:
+        time.sleep(seconds)
+        return False
+    return stop_event.wait(seconds)
+
+
+def _open_capture(url: str):
+    """เปิด VideoCapture ผ่าน FFmpeg พร้อม timeout ตอนเปิด/อ่าน (OpenCV >= 4.6)
+    ถ้า OpenCV รุ่นเก่าไม่มี property พวกนี้ ถอยกลับไปเปิดแบบเดิม"""
+    open_timeout = getattr(cv, "CAP_PROP_OPEN_TIMEOUT_MSEC", None)
+    read_timeout = getattr(cv, "CAP_PROP_READ_TIMEOUT_MSEC", None)
+    if open_timeout is None or read_timeout is None:
+        return cv.VideoCapture(url)
+    return cv.VideoCapture(url, cv.CAP_FFMPEG, [open_timeout, OPEN_TIMEOUT_MS, read_timeout, READ_TIMEOUT_MS])
+
 
 def _setup_logger(camera_id: str) -> logging.Logger:
     os.makedirs("logs", exist_ok=True)
@@ -34,7 +59,7 @@ def open_stream(url: str, logger: logging.Logger):
         logger.warning(f"[SSRF Guard] ปฏิเสธการเชื่อมต่อ RTSP: {e}")
         return None
 
-    cap = cv.VideoCapture(pinned_url)
+    cap = _open_capture(pinned_url)
     if not cap.isOpened():
         cap.release()
         return None
@@ -48,8 +73,7 @@ def _open_stream_with_retry(rtsp_url: str, logger: logging.Logger, stop_event=No
         if stop_event and stop_event.is_set():
             return None
         logger.warning(f"เชื่อมต่อ RTSP ไม่ได้ — รอ {RECONNECT_SEC} วินาทีแล้วลองใหม่...")
-        time.sleep(RECONNECT_SEC)
-        if stop_event and stop_event.is_set():
+        if _wait_or_stop(stop_event, RECONNECT_SEC):
             return None
         cap = open_stream(rtsp_url, logger)
     return cap
@@ -97,8 +121,7 @@ class RealtimeVideoStream:
                     self.cap = None
 
                 self.logger.warning(f"RTSP หลุดการเชื่อมต่อ — รอ {RECONNECT_SEC} วินาทีแล้ว reconnect...")
-                time.sleep(RECONNECT_SEC)
-                if not self.running or (self.stop_event and self.stop_event.is_set()):
+                if _wait_or_stop(self.stop_event, RECONNECT_SEC) or not self.running:
                     break
                 self.cap = open_stream(self.rtsp_url, self.logger)
                 if self.cap and self.cap.isOpened():
@@ -116,8 +139,7 @@ class RealtimeVideoStream:
                     except Exception:
                         pass
                     self.cap = None
-                time.sleep(RECONNECT_SEC)
-                if not self.running or (self.stop_event and self.stop_event.is_set()):
+                if _wait_or_stop(self.stop_event, RECONNECT_SEC) or not self.running:
                     break
                 self.cap = open_stream(self.rtsp_url, self.logger)
                 if self.cap and self.cap.isOpened():

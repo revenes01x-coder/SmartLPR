@@ -520,6 +520,8 @@ async def verify_pending_cameras():
     """
     Background verification จังหวะที่ 2 (จังหวะที่ 1 คือ SSRF guard ตอน POST /partner/cameras)
     เช็คกล้องที่ verification_status อยู่ใน (pending, failed) และยังไม่ครบโควต้าการลอง
+    เฉพาะกล้องที่ "ยังไม่เคยผ่านการตรวจเลย" (verified_at IS NULL) เท่านั้น — กล้องที่เคยใช้งานได้แล้ว
+    แต่ admin กดตรวจแล้วไม่ผ่านชั่วคราว (failed) จะไม่ถูกดึงมาตรวจซ้ำ/ลบทิ้งอัตโนมัติที่นี่
 
     ผ่าน -> is_active=True, verification_status='verified'
     ไม่ผ่านแต่ยังไม่ครบโควต้า -> verification_status='failed' รอ job รอบหน้าลองใหม่ (ทุก 20 วิ)
@@ -541,6 +543,7 @@ async def verify_pending_cameras():
             select(models.Camera).filter(
                 models.Camera.verification_status.in_(["pending", "failed"]),
                 models.Camera.verify_attempt_count < CAMERA_VERIFY_MAX_ATTEMPTS,
+                models.Camera.verified_at.is_(None),
             )
         )
         cameras_to_check = result.scalars().all()
@@ -559,6 +562,7 @@ async def verify_pending_cameras():
             if is_ok:
                 camera.is_active = True
                 camera.verification_status = "verified"
+                camera.verified_at = datetime.now(timezone.utc)
                 logging.info(f"[Camera Verify] camera id={camera.id} เชื่อมต่อ RTSP สำเร็จ -> verified")
 
             elif camera.verify_attempt_count >= CAMERA_VERIFY_MAX_ATTEMPTS:

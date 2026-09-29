@@ -320,6 +320,10 @@ async def verify_admin_camera(
     is_ok = await check_camera_rtsp(camera.rtsp_url, timeout_seconds=5)
     new_status = "verified" if is_ok else "failed"
     camera.verification_status = new_status
+    if is_ok and camera.verified_at is None:
+        camera.verified_at = datetime.now(timezone.utc)
+    # หมายเหตุ: ผล failed จากตรงนี้ไม่ทำให้กล้องที่เคยผ่านแล้ว (verified_at มีค่า) ถูกลบอัตโนมัติ
+    # เพราะ worker.verify_pending_cameras ตรวจซ้ำ/ลบเฉพาะกล้องที่ verified_at เป็น NULL เท่านั้น
     await db.commit()
 
     message = "เชื่อมต่อ RTSP สำเร็จ" if is_ok else "เชื่อมต่อไม่สำเร็จ"
@@ -363,6 +367,8 @@ async def verify_all_admin_cameras(
     for cam, is_ok in verify_results:
         new_status = "verified" if is_ok else "failed"
         cam.verification_status = new_status
+        if is_ok and cam.verified_at is None:
+            cam.verified_at = datetime.now(timezone.utc)
         if is_ok:
             verified_count += 1
         else:

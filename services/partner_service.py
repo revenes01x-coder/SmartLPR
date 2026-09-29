@@ -150,7 +150,9 @@ async def update_camera_status_from_partner(
     messages = []
 
     if payload.is_active is not None:
-        if payload.is_active and camera.verification_status != "verified":
+        # เปิดได้ถ้ากล้อง "เคย" ผ่านการตรวจ RTSP แล้ว (verified_at มีค่า) — ไม่ผูกกับสถานะล่าสุด
+        # เพราะ admin อาจกดตรวจตอนกล้องหลุดชั่วคราวจนสถานะเป็น failed ทั้งที่กล้องใช้งานได้ตามปกติ
+        if payload.is_active and camera.verified_at is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(

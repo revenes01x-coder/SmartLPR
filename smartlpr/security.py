@@ -25,6 +25,8 @@ def get_password_hash(password):
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
+    """data["sub"] ต้องเป็น user.id (ไม่ใช่ email) — id ไม่เคยเปลี่ยนและไม่ถูกนำกลับมาใช้ซ้ำ
+    ต่างจาก email ที่ user เปลี่ยนได้ (change-email) แล้วอาจมีบัญชีอื่นมาใช้ email เดิมภายหลัง"""
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
@@ -36,7 +38,7 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
     return encoded_jwt
 
 
-def create_password_reset_token(email: str) -> str:
+def create_password_reset_token(user_id: str) -> str:
     """Token ชั่วคราวอายุสั้น (นาที) ออกให้หลัง verify OTP สำเร็จ เพื่อยืนยันสิทธิ์ตั้งรหัสผ่านใหม่
     มี claim purpose='password_reset' แยกจาก access token ปกติ กัน token คนละประเภทเอามาใช้แทนกัน
 
@@ -46,7 +48,7 @@ def create_password_reset_token(email: str) -> str:
     ในช่วงที่ยังไม่หมดอายุตามเวลา"""
     expire = datetime.now(timezone.utc) + timedelta(minutes=PASSWORD_RESET_TOKEN_EXPIRE_MINUTES)
     to_encode = {
-        "sub": email,
+        "sub": user_id,  # user.id (ไม่ใช่ email) เหมือน access token
         "purpose": "password_reset",
         "exp": expire,
         "jti": uuid.uuid4().hex,
@@ -55,7 +57,7 @@ def create_password_reset_token(email: str) -> str:
 
 
 async def decode_password_reset_token(token: str, db: AsyncSession) -> str:
-    """ตรวจ token จาก create_password_reset_token คืน email ถ้าถูกต้อง ไม่งั้น raise HTTPException
+    """ตรวจ token จาก create_password_reset_token คืน user_id ถ้าถูกต้อง ไม่งั้น raise HTTPException
 
     [Async Migration]: เดิม sync ตอนนี้ async เพราะข้างในเรียก is_token_revoked() ที่ query DB
     ต้อง await ทั้งฟังก์ชันนี้และ caller (routers/auth.py: reset_password) เลยต้อง await ตาม"""
@@ -71,15 +73,15 @@ async def decode_password_reset_token(token: str, db: AsyncSession) -> str:
     if payload.get("purpose") != "password_reset":
         raise invalid_exception
 
-    email = payload.get("sub")
+    user_id = payload.get("sub")
     jti = payload.get("jti")
-    if not email or not jti:
+    if not user_id or not jti:
         raise invalid_exception
 
     if await is_token_revoked(db, jti):
         raise invalid_exception
 
-    return email
+    return user_id
 
 
 async def revoke_token(db: AsyncSession, token: str) -> None:
@@ -125,9 +127,11 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
+        # sub = user.id — token รุ่นเก่าที่ sub เป็น email จะหา user ไม่เจอ -> 401 แล้วหน้าเว็บ
+        # เรียก /auth/refresh ขอ access token ใบใหม่ (sub เป็น id) เองอัตโนมัติ ไม่ต้อง login ใหม่
+        user_id: str = payload.get("sub")
         jti: str | None = payload.get("jti")
-        if email is None:
+        if user_id is None:
             raise credentials_exception
 
         if payload.get("purpose") != "access":
@@ -138,7 +142,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
     if await is_token_revoked(db, jti):
         raise credentials_exception
 
-    result = await db.execute(select(models.User).filter(models.User.email == email))
+    result = await db.execute(select(models.User).filter(models.User.id == user_id))
     user = result.scalar_one_or_none()
     if user is None:
         raise credentials_exception

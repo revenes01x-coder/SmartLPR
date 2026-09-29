@@ -58,6 +58,12 @@ LOGIN_LOCKOUT_MINUTES = 5
 
 LOGIN_INACTIVITY_RESET_MINUTES = 30
 
+# [Security]: lockout ระดับ "บัญชี" (ไม่ผูก IP) — กันคนเดารหัสผ่านบัญชีเดียวโดยเปลี่ยน IP ไปเรื่อยๆ
+# (proxy/botnet) ซึ่ง lockout แบบ email+IP ด้านบนกันไม่ได้ ตั้งเพดานสูงกว่าแบบ IP พอสมควร เพื่อไม่ให้
+# ผู้ใช้ตัวจริงที่พิมพ์ผิดไม่กี่ครั้งโดนล็อก และจำกัดผลกระทบถ้ามีคนตั้งใจยิงผิดเพื่อล็อกบัญชีคนอื่น
+LOGIN_ACCOUNT_LOCKOUT_LIMIT = 20
+LOGIN_ACCOUNT_LOCKOUT_MINUTES = 15
+
 REGISTER_LOCKOUT_LIMIT = 5
 REGISTER_LOCKOUT_MINUTES = 5
 
@@ -93,11 +99,11 @@ async def _resolve_actor_id_for_logout(token: str, db: AsyncSession) -> str | No
     except JWTError:
         return None
 
-    email = payload.get("sub")
-    if not email:
+    user_id = payload.get("sub")
+    if not user_id:
         return None
 
-    result = await db.execute(select(models.User).filter(models.User.email == email))
+    result = await db.execute(select(models.User).filter(models.User.id == user_id))
     user = result.scalar_one_or_none()
     return user.id if user else None
 
@@ -372,6 +378,23 @@ async def verify_otp_endpoint(
             detail=f"OTP ไม่ถูกต้อง (เหลือโอกาสกรอกอีก {max(remaining, 0)} ครั้ง)",
         )
 
+    # [Security]: OTP ถูกแล้ว แต่ต้องรู้รหัสผ่านปัจจุบันของบัญชีด้วย — กันเคสคนอื่นสมัครซ้ำด้วยอีเมล
+    # นี้แล้วเขียนทับรหัสผ่าน (register_user) รอให้เจ้าของอีเมลตัวจริงเผลอกรอก OTP ยืนยันบัญชีที่
+    # ใช้รหัสผ่านของคนร้าย — เช็คหลัง OTP เสมอ คนที่ไม่มี OTP จึงใช้ endpoint นี้เดารหัสผ่านไม่ได้
+    if not verify_password(payload.password, user.hashed_password):
+        otp_record.attempt_count += 1
+        remaining = OTP_MAX_ATTEMPTS - otp_record.attempt_count
+        if remaining <= 0:
+            otp_record.is_used = True
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "รหัสผ่านไม่ตรงกับที่ใช้สมัครครั้งล่าสุดของอีเมลนี้ กรุณาสมัครสมาชิกใหม่อีกครั้ง"
+                "ด้วยรหัสผ่านที่ต้องการ แล้วยืนยันด้วย OTP ชุดใหม่"
+            ),
+        )
+
     user.is_verified = True
     await db.delete(otp_record)
 
@@ -454,8 +477,13 @@ async def login(
 
     normalized_email = form_data.username.strip().lower()
     lockout_key = f"login_fail_{normalized_email}_{client_ip}"
+    account_lockout_key = f"login_fail_account_{normalized_email}"
 
     await check_lockout(db, lockout_key, "login_fail", limit=LOGIN_LOCKOUT_LIMIT, window_minutes=LOGIN_LOCKOUT_MINUTES)
+    await check_lockout(
+        db, account_lockout_key, "login_fail_account",
+        limit=LOGIN_ACCOUNT_LOCKOUT_LIMIT, window_minutes=LOGIN_ACCOUNT_LOCKOUT_MINUTES,
+    )
 
     result = await db.execute(select(models.User).filter(models.User.email == normalized_email))
     user = result.scalar_one_or_none()
@@ -466,6 +494,12 @@ async def login(
             db, lockout_key, "login_fail",
             limit=LOGIN_LOCKOUT_LIMIT,
             window_minutes=LOGIN_LOCKOUT_MINUTES,
+            inactivity_reset_minutes=LOGIN_INACTIVITY_RESET_MINUTES,
+        )
+        await record_attempt(
+            db, account_lockout_key, "login_fail_account",
+            limit=LOGIN_ACCOUNT_LOCKOUT_LIMIT,
+            window_minutes=LOGIN_ACCOUNT_LOCKOUT_MINUTES,
             inactivity_reset_minutes=LOGIN_INACTIVITY_RESET_MINUTES,
         )
         raise HTTPException(status_code=401, detail="อีเมลหรือรหัสผ่านไม่ถูกต้อง")
@@ -485,6 +519,7 @@ async def login(
 
     # login สำเร็จ -> ล้างประวัติพลาดทิ้ง ไม่ต้องรอ window หมดอายุเอง
     await clear_lockout(db, lockout_key, "login_fail")
+    await clear_lockout(db, account_lockout_key, "login_fail_account")
 
     # [Audit Log]: เพิ่ม log ไว้ในนี้ก่อนออก token — จะถูก commit พร้อมกับ refresh token ที่ออก
     # ใน _issue_refresh_token() ด้านล่าง (เรียก db.commit() อยู่แล้ว) ไม่ต้อง commit แยกเพิ่ม
@@ -498,7 +533,7 @@ async def login(
         actor_type="user",
     )
 
-    access_token = create_access_token(data={"sub": user.email})
+    access_token = create_access_token(data={"sub": user.id})
 
     # ออก refresh token ใบใหม่ (family ใหม่ทั้งสาย) ใส่ httpOnly cookie ให้เลย
     plain_refresh_token = await _issue_refresh_token(db, user, remember_me=remember_me)
@@ -549,7 +584,7 @@ async def refresh_access_token(
 
             new_plain_token = await _issue_refresh_token(db, user, family_id=record.family_id, remember_me=remember_me)
             _set_refresh_cookie(response, new_plain_token, remember_me=remember_me)
-            new_access_token = create_access_token(data={"sub": user.email})
+            new_access_token = create_access_token(data={"sub": user.id})
             return {"access_token": new_access_token, "token_type": "bearer"}
         else:
             # ใบนี้เคยถูก rotate ทิ้งไปนานแล้ว แต่มีคนเอามาใช้ซ้ำ -> สัญญาณ token หลุด revoke ทั้งสายทันที
@@ -575,7 +610,7 @@ async def refresh_access_token(
     new_plain_token = await _issue_refresh_token(db, user, family_id=record.family_id, remember_me=remember_me)
     _set_refresh_cookie(response, new_plain_token, remember_me=remember_me)
 
-    new_access_token = create_access_token(data={"sub": user.email})
+    new_access_token = create_access_token(data={"sub": user.id})
     return {"access_token": new_access_token, "token_type": "bearer"}
 
 
@@ -718,7 +753,7 @@ async def verify_reset_otp(
     await db.delete(otp_record)
     await db.commit()
 
-    reset_token = create_password_reset_token(user.email)
+    reset_token = create_password_reset_token(user.id)
     return schemas.ResetTokenResponse(reset_token=reset_token)
 
 
@@ -727,14 +762,14 @@ async def reset_password(
     ip_address: Optional[str],
     db: AsyncSession,
 ):
-    email = await decode_password_reset_token(payload.reset_token, db)
+    user_id = await decode_password_reset_token(payload.reset_token, db)
 
     client_ip = ip_address
-    lockout_key = f"reset_password_{email}_{client_ip}"
+    lockout_key = f"reset_password_{user_id}_{client_ip}"
 
     await check_and_record(db, lockout_key, "reset_password", limit=RESET_PASSWORD_LOCKOUT_LIMIT, window_minutes=RESET_PASSWORD_LOCKOUT_MINUTES)
 
-    result = await db.execute(select(models.User).filter(models.User.email == email))
+    result = await db.execute(select(models.User).filter(models.User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ไม่พบผู้ใช้นี้ในระบบ")

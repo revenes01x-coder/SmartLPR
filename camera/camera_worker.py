@@ -465,6 +465,11 @@ def run_inference_worker(frame_queue, stop_event=None):
     yolo_model = YOLO(YOLO_MODEL_PATH)
 
     logger.info("กำลังโหลด YOLO model (ตรวจจับรถทั้งคัน)...")
+    if not os.path.isfile(CAR_DETECTOR_MODEL_PATH):
+        logger.warning(
+            f"ไม่พบไฟล์โมเดลตรวจจับรถที่ '{CAR_DETECTOR_MODEL_PATH}' — ultralytics จะพยายามดาวน์โหลด"
+            "จากอินเทอร์เน็ตแทน (ถ้าเครื่องไม่มีเน็ตจะโหลดไม่สำเร็จ) ตรวจค่า CAR_DETECTOR_MODEL_PATH ใน .env"
+        )
     car_detector = YOLO(CAR_DETECTOR_MODEL_PATH)
 
     logger.info("กำลังโหลดโมเดลแยกสีรถ...")

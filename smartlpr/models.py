@@ -81,6 +81,11 @@ class Camera(Base):
     is_active = Column(Boolean, default=False, nullable=False)
     verification_status = Column(String, default="pending", nullable=False, index=True)
     verify_attempt_count = Column(Integer, default=0, nullable=False)
+    # เวลาที่กล้องผ่านการตรวจ RTSP "ครั้งแรก" (NULL = ยังไม่เคยผ่านเลย) — ใช้แยกกล้องใหม่ที่รอตรวจ
+    # ออกจากกล้องที่เคยใช้งานได้จริงแล้ว: background job (worker.verify_pending_cameras) จะตรวจซ้ำ
+    # และลบอัตโนมัติเฉพาะกล้องที่ verified_at เป็น NULL เท่านั้น กล้องที่เคยผ่านแล้วต่อให้ admin
+    # กดตรวจแล้วไม่ผ่านชั่วคราว (สถานะ failed) ก็จะไม่ถูกลบทิ้งอัตโนมัติ
+    verified_at = Column(DateTime(timezone=True), nullable=True)
     delay = Column(Integer, default=1, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

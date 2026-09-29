@@ -54,7 +54,7 @@ services:
     volumes:
       - ./frontend:/usr/share/nginx/html
       - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf
-      - ./captures:/app/captures
+      # [PDPA/Security]: ไม่ mount ./captures เข้า nginx แล้ว — nginx ไม่ต้องเข้าถึงรูปป้ายทะเบียนเลย
     depends_on:
       - backend
     networks:

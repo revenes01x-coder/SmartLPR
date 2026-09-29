@@ -26,6 +26,13 @@ async def _init_models() -> None:
         from sqlalchemy import text
         await conn.execute(text("ALTER TABLE access_requests DROP COLUMN IF EXISTS contact_email;"))
         await conn.execute(text("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS delay INTEGER NOT NULL DEFAULT 1;"))
+        await conn.execute(text("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;"))
+        # Backfill กล้องเดิมที่เคยผ่านการตรวจแล้ว (สถานะ verified หรือเปิดใช้งานอยู่ — เปิดได้ต้องเคย
+        # verified มาก่อนเท่านั้น) ไม่ให้ถูก background job มองเป็นกล้องใหม่แล้วลบทิ้ง — idempotent
+        await conn.execute(text(
+            "UPDATE cameras SET verified_at = COALESCE(created_at, now()) "
+            "WHERE verified_at IS NULL AND (verification_status = 'verified' OR is_active = TRUE);"
+        ))
 
 
 async def _seed_contact_channels() -> None:
@@ -256,4 +263,14 @@ async def receive_from_rtsp(
 # พวกนี้กับ app หลังจากนั้นจะพังทันที (AttributeError) — uvicorn (smartlpr.main:app) จะหยิบ
 # ตัวแปร app ตัวสุดท้ายในไฟล์นี้ไปใช้เป็น ASGI entrypoint จริง
 # ---------------------------------------------------------------------------
-app = ProxyHeadersMiddleware(app, trusted_hosts="*")
+# [Security]: เชื่อ X-Forwarded-For เฉพาะเมื่อ request มาจาก proxy ของเราเอง (nginx ใน docker network)
+# เท่านั้น — เดิมตั้ง trusted_hosts="*" ทำให้ uvicorn หยิบ IP "ตัวแรกสุด" ใน header ซึ่ง client
+# ปลอมเองได้ -> rate limit / login lockout ที่ผูกกับ IP ถูกเลี่ยงได้ทั้งหมด
+# nginx.conf ตั้ง X-Forwarded-For = $remote_addr (เขียนทับค่าที่ client ส่งมา) คู่กันกับตรงนี้
+# ค่า default ครอบคลุม loopback + private range ที่ Docker ใช้แจก IP ให้ container
+# (backend ไม่ได้ publish port ออกนอกเครื่อง จึงเข้าถึงได้เฉพาะผ่าน nginx/container ภายในเท่านั้น)
+TRUSTED_PROXY_IPS = os.getenv(
+    "TRUSTED_PROXY_IPS",
+    "127.0.0.1,::1,172.16.0.0/12,192.168.0.0/16,10.0.0.0/8",
+)
+app = ProxyHeadersMiddleware(app, trusted_hosts=TRUSTED_PROXY_IPS)

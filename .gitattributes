@@ -1,0 +1,13 @@
+# ให้ git เก็บไฟล์ข้อความในรีโปเป็น LF เสมอ ไม่ว่าจะ commit จาก Windows หรือ Linux
+# (กัน diff ปลอมทั้งไฟล์ที่เกิดจาก CRLF/LF ปนกัน) — ไฟล์บนเครื่องยังเปิดแก้ด้วย CRLF ได้ตามปกติ
+* text=auto eol=lf
+
+# ไฟล์ไบนารี (โมเดล AI / รูป / PDF) ห้ามแปลงอะไรทั้งสิ้น
+*.pt binary
+*.pth binary
+*.h5 binary
+*.onnx binary
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.pdf binary

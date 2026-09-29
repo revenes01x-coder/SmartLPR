@@ -74,7 +74,10 @@ PLATE_OCR_MODEL_PATH = os.getenv("PLATE_OCR_MODEL_PATH")
 PLATE_OCR_CHAR_FILE = os.getenv("PLATE_OCR_CHAR_FILE")
 PLATE_YOLO_MODEL_PATH = os.getenv("PLATE_YOLO_MODEL_PATH")
 
-CAR_DETECTOR_MODEL_PATH = os.getenv("CAR_DETECTOR_MODEL_PATH", "yolo11n.pt")
+# ไฟล์โมเดลจริงอยู่ที่ models/detector/yolo11n.pt — เดิม default เป็น "yolo11n.pt" เฉยๆ ซึ่งไม่มีไฟล์
+# นี้ที่ /app ทำให้ ultralytics แอบดาวน์โหลดใหม่จากอินเทอร์เน็ตทุกครั้งที่ container เริ่ม
+# (เครื่องไม่มีเน็ต = AI worker crash วน)
+CAR_DETECTOR_MODEL_PATH = os.getenv("CAR_DETECTOR_MODEL_PATH", "models/detector/yolo11n.pt")
 
 CAR_COLOR_MODEL_PATH = os.getenv("CAR_COLOR_MODEL_PATH")
 CAR_COLOR_CLASSNAMES_PATH = os.getenv("CAR_COLOR_CLASSNAMES_PATH")

@@ -255,8 +255,13 @@ class EmailChangeVerifyRequest(BaseModel):
 
 # ---- สำหรับ OTP verification ----
 class OtpVerifyRequest(BaseModel):
+    """[Security]: ต้องส่ง password มาคู่กับ OTP เสมอ — OTP พิสูจน์แค่ว่าเป็นเจ้าของอีเมล แต่ไม่ได้
+    พิสูจน์ว่ารหัสผ่านที่บันทึกอยู่ตอนนี้เป็นของเจ้าของอีเมล (บัญชีที่ยังไม่ยืนยันถูกสมัครซ้ำเขียนทับ
+    รหัสผ่านได้ ดู auth_service.register_user) การบังคับให้กรอกรหัสผ่านที่ตรงกันตอนยืนยัน ทำให้บัญชี
+    ยืนยันได้เฉพาะคนที่รู้ทั้ง OTP (เจ้าของอีเมล) และรหัสผ่านปัจจุบันเท่านั้น"""
     email: EmailStr
     otp: str
+    password: str = Field(..., min_length=1, max_length=PASSWORD_INPUT_MAX_CHARS)
 
     @field_validator("email")
     @classmethod
@@ -270,6 +275,12 @@ class OtpVerifyRequest(BaseModel):
         if not _OTP_RE.match(v):
             raise ValueError("OTP ต้องเป็นตัวเลข 6 หลัก")
         return v
+
+    @field_validator("password")
+    @classmethod
+    def strip_password(cls, v: str) -> str:
+        # strip ให้ตรงกับตอนสมัคร (_validate_password_rules) และตอน login
+        return v.strip()
 
 
 class OtpResendRequest(BaseModel):

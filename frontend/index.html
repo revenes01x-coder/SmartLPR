@@ -3730,6 +3730,11 @@ function focusOtpFirstBox(containerId) {
    เก็บอีเมลไว้ตรงนี้ ไม่ให้ user ต้องพิมพ์ซ้ำตอนอยู่หน้ายืนยัน OTP */
 let otpPurpose = 'register'; // 'register' | 'reset'
 let otpEmail = null;
+/* รหัสผ่านที่ผู้ใช้เพิ่งกรอก (ตอนสมัคร/ตอน login ที่เจอ UNVERIFIED_EMAIL) — เก็บไว้ใน memory เท่านั้น
+   (ไม่ลง localStorage/cookie) เพื่อส่งคู่กับ OTP ตอน /auth/verify-otp ให้อัตโนมัติ backend บังคับให้
+   รหัสผ่านตรงกับบัญชีด้วย กันคนอื่นสมัครซ้ำเขียนทับรหัสผ่านแล้วรอให้เจ้าของอีเมลเผลอยืนยัน OTP ให้
+   ล้างทิ้งทันทีหลังยืนยันสำเร็จ */
+let otpPassword = null;
 let resetToken = null;
 
 /* นับถอยหลังเวลาหมดอายุของ OTP — backend ส่ง otp_expires_in_seconds กลับมาจริงทุกครั้งที่ออก OTP
@@ -3924,6 +3929,7 @@ async function doRegister() {
     const data = await apiCall('/auth/register', { method: 'POST', auth: false, json: { username, email, password, confirm_password } });
     otpPurpose = 'register';
     otpEmail = email;
+    otpPassword = password;
     document.getElementById('verify-email-display').textContent = email;
     switchAuthTab('verify');
     startOtpCountdown(data && data.otp_expires_in_seconds);
@@ -3960,6 +3966,8 @@ async function goToVerifyFromLogin() {
     const data = await apiCall('/auth/resend-otp', { method: 'POST', auth: false, json: { email } });
     otpPurpose = 'register';
     otpEmail = email;
+    // มาจากหน้า login: backend เช็ครหัสผ่านผ่านแล้วก่อนตอบ UNVERIFIED_EMAIL จึงใช้ค่าในช่องนี้ได้เลย
+    otpPassword = document.getElementById('login-password').value;
     document.getElementById('verify-email-display').textContent = email;
     switchAuthTab('verify');
     if (data && data.otp_expires_in_seconds) {
@@ -3979,6 +3987,7 @@ async function goToVerifyFromRegister() {
   
   otpPurpose = 'register';
   otpEmail = email;
+  otpPassword = document.getElementById('reg-password').value;
   document.getElementById('verify-email-display').textContent = email;
   switchAuthTab('verify');
   hideAlert('verify-alert');
@@ -4028,7 +4037,12 @@ async function doVerifyOtp() {
       switchAuthTab('reset');
       hideAlert('reset-alert'); hideAlert('reset-success');
     } else {
-      const data = await apiCall('/auth/verify-otp', { method: 'POST', auth: false, json: { email: otpEmail, otp } });
+      if (!otpPassword) {
+        showAlert('verify-alert', 'ไม่พบรหัสผ่านที่ใช้สมัคร กรุณาเข้าสู่ระบบด้วยอีเมลและรหัสผ่านอีกครั้ง แล้วกดยืนยัน OTP จากหน้านั้น');
+        return;
+      }
+      const data = await apiCall('/auth/verify-otp', { method: 'POST', auth: false, json: { email: otpEmail, otp, password: otpPassword } });
+      otpPassword = null;
       stopOtpCountdown();
       showAlert('verify-success', (data && data.message) || 'ยืนยันสำเร็จ', 'success');
       setTimeout(() => switchAuthTab('login'), 900);
