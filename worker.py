@@ -1,10 +1,11 @@
+import os
 import asyncio
 import uuid
 import logging
 import httpx
 from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select, update, delete
+from sqlalchemy import select, update, delete, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from smartlpr import models
 from smartlpr.database import SessionLocal
@@ -332,32 +333,71 @@ async def _ping_endpoint(client: httpx.AsyncClient, url: str) -> bool:
         return False
 
 
+# กันไม่ให้ graveyard resume รันซ้อนกันเอง (scheduler ทุก 30 นาที + resume_endpoint_now ที่ admin
+# สั่งผ่าน BackgroundTasks รันใน event loop เดียวกัน) — ถ้าซ้อนกัน dead_letter ชุดเดียวกันอาจถูกส่งซ้ำ 2 รอบ
+_graveyard_lock = asyncio.Lock()
+
+
+def _event_files_exist(event: models.WebhookEvent) -> bool:
+    return bool(event.full_image_path and event.crop_image_path
+                and os.path.exists(event.full_image_path) and os.path.exists(event.crop_image_path))
+
+
 async def process_graveyard_resume(endpoint_ids: list[int] | None = None):
     """
     Job B — แยกเด็ดขาดจาก Job A ทั้งคิวและ Semaphore (RESUME_CONCURRENCY)
-    ทุก 30 นาที (default): เช็คเฉพาะ endpoint ที่ถูกตัดไฟ (is_healthy=False) ว่าฟื้นหรือยัง
+    ทุก 30 นาที (default): ส่ง event ที่ค้างอยู่ใน dead_letter ซ้ำ ให้ endpoint ที่ปลายทางกลับมาแล้ว
 
-    endpoint_ids: ไม่ระบุ (None) = พฤติกรรมเดิมทุกประการ (เรียกจาก scheduler ทุก 30 นาที)
-    ระบุมา = จำกัด scope เฉพาะ endpoint ที่ระบุ ใช้ตอน routers/admin.py:set_webhook_status
+    endpoint ที่ถูกเช็ค (ต้อง is_active=True เสมอ):
+    - endpoint ที่ถูกตัดไฟ (is_healthy=False) — เช็คว่าฟื้นหรือยัง ถ้าฟื้นเปิดไฟกลับ
+    - [แก้ไข] endpoint ที่ยังไม่ถูกตัดไฟ แต่มี event ค้างใน dead_letter — เคสปลายทางล่มสั้นๆ
+      มี event ตกสุสานไม่ถึง DEAD_LETTER_THRESHOLD เดิม event พวกนี้ไม่เคยถูกส่งซ้ำเลย
+      (เพราะเดิม job นี้ดูเฉพาะ is_healthy=False) ค้างอยู่ใน dead_letter ถาวร
+
+    ทุก endpoint ต้องผ่าน health check (_ping_endpoint) ก่อนถึงจะ resend จริง
+    event ที่ไฟล์รูปหายไปแล้ว (ส่งยังไงก็ไม่ผ่าน) จะไม่ถูกส่งซ้ำ และไม่นับเป็น streak ตัดไฟ
+
+    endpoint_ids: ไม่ระบุ (None) = ทุก endpoint (เรียกจาก scheduler ทุก 30 นาที)
+    ระบุมา = จำกัด scope เฉพาะ endpoint ที่ระบุ ใช้ตอน services/admin_service.py:set_webhook_status
     เรียกทันทีหลัง admin เปิด endpoint ที่เคยถูกตัดไฟกลับมา
     """
+    async with _graveyard_lock:
+        await _process_graveyard_resume(endpoint_ids)
+
+
+async def _process_graveyard_resume(endpoint_ids: list[int] | None = None):
     db: AsyncSession = SessionLocal()
     try:
+        has_dead_letters = (
+            select(models.WebhookEvent.id)
+            .filter(
+                models.WebhookEvent.webhook_endpoint_id == models.WebhookEndpoint.id,
+                models.WebhookEvent.status == "dead_letter",
+                models.WebhookEvent.deleted_at.is_(None),
+            )
+            .exists()
+        )
         query = select(models.WebhookEndpoint).filter(
-            models.WebhookEndpoint.is_healthy == False,  # noqa: E712
-            models.WebhookEndpoint.is_active == True,
+            models.WebhookEndpoint.is_active == True,  # noqa: E712
+            or_(models.WebhookEndpoint.is_healthy == False, has_dead_letters),  # noqa: E712
         )
         if endpoint_ids is not None:
             query = query.filter(models.WebhookEndpoint.id.in_(endpoint_ids))
-        unhealthy_endpoints = (await db.execute(query)).scalars().all()
+        candidate_endpoints = (await db.execute(query)).scalars().all()
 
-        if not unhealthy_endpoints:
+        if not candidate_endpoints:
             return
 
-        recovered_endpoints = []
+        reachable_endpoints = []   # ping ผ่าน -> resend dead_letter ของ endpoint นี้ได้
+        recovered_endpoints = []   # เคยถูกตัดไฟ แล้วเพิ่งฟื้นรอบนี้
+        results = []
+        dead_events = []
         async with httpx.AsyncClient() as client:
-            for endpoint in unhealthy_endpoints:
-                if await _ping_endpoint(client, endpoint.url):
+            for endpoint in candidate_endpoints:
+                if not await _ping_endpoint(client, endpoint.url):
+                    continue
+                reachable_endpoints.append(endpoint)
+                if not endpoint.is_healthy:
                     endpoint.is_healthy = True
                     endpoint.consecutive_dead_letters = 0
                     recovered_endpoints.append(endpoint)
@@ -375,16 +415,18 @@ async def process_graveyard_resume(endpoint_ids: list[int] | None = None):
             # เปิดไฟให้ endpoint ที่ฟื้นก่อน commit ทันที แม้ resume ด้านล่างจะพังก็ไม่เสีย progress ตรงนี้
             await db.commit()
 
-            if not recovered_endpoints:
+            if not reachable_endpoints:
                 return
 
-            recovered_ids = [ep.id for ep in recovered_endpoints]
+            reachable_ids = [ep.id for ep in reachable_endpoints]
             dead_events_result = await db.execute(
-                select(models.WebhookEvent).filter(
-                    models.WebhookEvent.webhook_endpoint_id.in_(recovered_ids),
+                select(models.WebhookEvent)
+                .filter(
+                    models.WebhookEvent.webhook_endpoint_id.in_(reachable_ids),
                     models.WebhookEvent.status == "dead_letter",
                     models.WebhookEvent.deleted_at.is_(None),
                 )
+                .order_by(models.WebhookEvent.created_at.asc())
             )
             dead_events = dead_events_result.scalars().all()
 
@@ -396,7 +438,7 @@ async def process_graveyard_resume(endpoint_ids: list[int] | None = None):
                 return
 
             # [Suspend Guard]: endpoint ฟื้นแล้วก็จริง แต่ถ้าเจ้าของ event ยังถูกระงับอยู่ ไม่ควร
-            # resume ส่งให้ — ตัดออกจากรอบนี้ไปก่อน
+            # resume ส่งให้ — ตัดออกจากรอบนี้ไปก่อน (ยังอยู่ใน dead_letter รอรอบหน้าหลังปลดระงับ)
             suspended_user_ids = await _get_suspended_user_ids(db, {e.user_id for e in dead_events if e.user_id})
             skipped_suspended = [e for e in dead_events if e.user_id in suspended_user_ids]
             dead_events = [e for e in dead_events if e.user_id not in suspended_user_ids]
@@ -406,15 +448,25 @@ async def process_graveyard_resume(endpoint_ids: list[int] | None = None):
                     f"[Graveyard Resume] ข้าม {len(skipped_suspended)} event เพราะเจ้าของถูกระงับอยู่"
                 )
 
+            # ไฟล์รูปหายไปแล้ว (เช่นถูก cleanup) ส่งซ้ำยังไงก็ไม่ผ่าน -> ไม่ส่ง และไม่ให้นับเป็น streak
+            # ตัดไฟ endpoint ที่ปลายทางปกติดีอยู่
+            files_ok = await asyncio.gather(*(asyncio.to_thread(_event_files_exist, e) for e in dead_events))
+            missing_files = [e for e, ok in zip(dead_events, files_ok) if not ok]
+            dead_events = [e for e, ok in zip(dead_events, files_ok) if ok]
+            if missing_files:
+                logging.warning(
+                    f"[Graveyard Resume] ข้าม {len(missing_files)} event เพราะไม่พบไฟล์รูปแล้ว (ส่งซ้ำไม่ได้)"
+                )
+
             if not dead_events:
                 return
 
-            endpoints_by_id = {ep.id: ep for ep in recovered_endpoints}
             semaphore = asyncio.Semaphore(RESUME_CONCURRENCY)
             results = await asyncio.gather(
                 *(_send_with_semaphore(semaphore, client, event) for event in dead_events)
             )
 
+        endpoints_by_id = {ep.id: ep for ep in reachable_endpoints}
         tripped_endpoints = {}
         for event, result_type, error_msg in results:
             endpoint = endpoints_by_id.get(event.webhook_endpoint_id)
@@ -424,7 +476,7 @@ async def process_graveyard_resume(endpoint_ids: list[int] | None = None):
                     _mark_endpoint_outcome(endpoint, success=True)
             else:
                 logging.warning(f"Resume ส่งไม่สำเร็จอีกครั้ง Event ID: {event.id} | {result_type} | {error_msg}")
-                event.status = "dead_letter"  # กลับไปสุสาน รอ health check รอบหน้า (อีก 30 นาที)
+                event.status = "dead_letter"  # กลับไปสุสาน รอรอบหน้า (อีก 30 นาที)
                 if endpoint:
                     if _mark_endpoint_outcome(endpoint, success=False):
                         tripped_endpoints[endpoint.id] = endpoint

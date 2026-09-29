@@ -689,7 +689,9 @@ def run_inference_worker(frame_queue, stop_event=None):
             for cl in clusters:
                 finalize_cluster(cl, c_save_full, c_save_crop, logger, io_executor, c_recent, c_delay)
 
-        io_executor.shutdown(wait=False)
+        # รองานเซฟรูป/ส่ง /capture-event ที่ค้างอยู่ให้เสร็จก่อนจบโปรเซส (ตอนถูกสั่งหยุดแบบ graceful)
+        # เดิม wait=False -> ป้ายที่เพิ่ง finalize ในบล็อกนี้มักหายไปเพราะโปรเซสจบก่อนได้ส่ง
+        io_executor.shutdown(wait=True)
         logger.info("Central Inference Worker หยุดการทำงานเรียบร้อย")
 
 

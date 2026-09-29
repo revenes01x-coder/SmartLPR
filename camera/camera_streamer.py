@@ -138,6 +138,10 @@ class RealtimeVideoStream:
         self.running = False
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=1.0)
+            if self.thread.is_alive():
+                # thread ยังค้างอยู่ใน cap.read() (RTSP ค้าง) -> ห้าม release cap ซ้อนจากอีก thread
+                # (อาจค้าง/crash) ปล่อยให้ OS เก็บกวาดตอนโปรเซสจบ เพื่อให้โปรเซสหยุดได้ทันเวลา
+                return
         if self.cap:
             try:
                 self.cap.release()
