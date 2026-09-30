@@ -3001,7 +3001,10 @@
 //   (คนละอันกับ webhook target URL ที่กรอกในฟอร์ม "เพิ่ม Endpoint ใหม่" ด้านล่าง)
 // ทดสอบง่ายๆ ก่อนใช้งานจริง: เปิด API_BASE + "/docs" ในแท็บใหม่ตรงๆ ถ้าเห็นหน้า Swagger
 // แปลว่า URL ถูกต้องแล้ว
-const API_BASE = (window.location.port === "8080") ? "http://localhost:8000" : "/api";
+// BASE_PATH: ถ้าเปิดผ่าน Nginx ของเพื่อนที่ http://โดเมน/smartlpr/ ต้องให้ API วิ่งไป /smartlpr/api
+// (ถ้ายิง /api ตรงๆ จะไปโดนเว็บของเพื่อนแทน) ส่วนเปิดตรงผ่านพอร์ต 8081 ก็ยังใช้ /api ได้ตามเดิม
+const BASE_PATH = (window.location.pathname === "/smartlpr" || window.location.pathname.startsWith("/smartlpr/")) ? "/smartlpr" : "";
+const API_BASE = (window.location.port === "8080") ? "http://localhost:8000" : BASE_PATH + "/api";
 
 function setAccessCookie(val, maxAge=900) {
   if (val) {
