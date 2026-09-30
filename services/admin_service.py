@@ -88,12 +88,41 @@ async def get_admin_dashboard(db: AsyncSession, admin: models.User):
     )
 
 
+_QUEUE_STATUSES = ("pending", "failed", "dead_letter")
+
+
+def _escape_like(text: str) -> str:
+    # กันไม่ให้ % และ _ ที่ผู้ใช้พิมพ์มา กลายเป็น wildcard ของ SQL LIKE (เช่นพิมพ์ "_" แล้วเจอทุกแถว)
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 async def list_queue_events(
     status_filter: Optional[str],
-    limit: int,
+    webhook_url: Optional[str],
+    search: Optional[str],
+    page_params: PageParams,
     db: AsyncSession,
     admin: models.User,
 ):
+    # เงื่อนไขพื้นฐาน (ยังไม่ถูกลบ + สถานะที่เลือก) ใช้ร่วมกันทั้งตารางและ dropdown Webhook
+    base_filters = [models.WebhookEvent.deleted_at.is_(None)]
+    if status_filter and status_filter != "all":
+        base_filters.append(models.WebhookEvent.status == status_filter)
+    else:
+        base_filters.append(models.WebhookEvent.status.in_(_QUEUE_STATUSES))
+
+    # dropdown: นับจากเงื่อนไขพื้นฐานเท่านั้น (ไม่สนคำค้นหา/Webhook ที่เลือก) ตัวเลือกจะได้ไม่หายไปตอนกำลังกรอง
+    webhook_rows = await db.execute(
+        select(models.WebhookEvent.target_url, func.count().label("count"))
+        .filter(*base_filters)
+        .group_by(models.WebhookEvent.target_url)
+        .order_by(models.WebhookEvent.target_url)
+    )
+    webhooks = [
+        schemas.AdminQueueWebhookOption(target_url=url, count=count)
+        for url, count in webhook_rows.all()
+    ]
+
     query = (
         select(
             models.WebhookEvent,
@@ -101,20 +130,37 @@ async def list_queue_events(
             models.User.username.label("user_username"),
         )
         .outerjoin(models.User, models.WebhookEvent.user_id == models.User.id)
-        .filter(models.WebhookEvent.deleted_at.is_(None))
+        .filter(*base_filters)
     )
 
-    if status_filter and status_filter != "all":
-        query = query.filter(models.WebhookEvent.status == status_filter)
-    else:
-        query = query.filter(models.WebhookEvent.status.in_(["pending", "failed", "dead_letter"]))
+    if webhook_url:
+        query = query.filter(models.WebhookEvent.target_url == webhook_url)
 
-    query = query.order_by(models.WebhookEvent.created_at.desc()).limit(limit)
-    result = await db.execute(query)
-    rows = result.all()
+    if search and search.strip():
+        pattern = f"%{_escape_like(search.strip())}%"
+        query = query.filter(or_(
+            models.WebhookEvent.target_url.ilike(pattern, escape="\\"),
+            models.WebhookEvent.camera_id.ilike(pattern, escape="\\"),
+            models.User.email.ilike(pattern, escape="\\"),
+            models.User.username.ilike(pattern, escape="\\"),
+            models.WebhookEvent.payload["license_plate"].as_string().ilike(pattern, escape="\\"),
+            models.WebhookEvent.payload["province"].as_string().ilike(pattern, escape="\\"),
+        ))
+
+    # นับทั้งหมดก่อน (ไว้คำนวณจำนวนหน้า) แล้วค่อยดึงเฉพาะหน้าที่ขอด้วย offset/limit
+    # (ใช้ paginate() กลางไม่ได้ เพราะมันใช้ .scalars() ซึ่งจะเก็บแค่คอลัมน์แรก ทำให้อีเมล/username หาย)
+    total = (await db.execute(
+        select(func.count()).select_from(query.order_by(None).subquery())
+    )).scalar_one()
+
+    result = await db.execute(
+        query.order_by(models.WebhookEvent.created_at.desc())
+        .offset(page_params.offset)
+        .limit(page_params.page_size)
+    )
 
     items = []
-    for event, user_email, user_username in rows:
+    for event, user_email, user_username in result.all():
         payload = event.payload if isinstance(event.payload, dict) else {}
         items.append(
             schemas.AdminQueueEventItem(
@@ -133,7 +179,16 @@ async def list_queue_events(
                 province=payload.get("province"),
             )
         )
-    return items
+
+    total_pages = (total + page_params.page_size - 1) // page_params.page_size if total else 0
+    return {
+        "items": items,
+        "total": total,
+        "page": page_params.page,
+        "page_size": page_params.page_size,
+        "total_pages": total_pages,
+        "webhooks": webhooks,
+    }
 
 
 async def list_access_requests(

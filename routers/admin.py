@@ -30,20 +30,24 @@ async def get_admin_dashboard(
     return await admin_service.get_admin_dashboard(db=db, admin=admin)
 
 
-@router.get("/queue-events", response_model=List[schemas.AdminQueueEventItem])
+@router.get("/queue-events", response_model=schemas.AdminQueueEventPage)
 async def list_queue_events(
-    status_filter: Optional[str] = Query(None, alias="status", description="pending / failed / dead_letter / all"),
-    limit: int = Query(100, ge=1, le=500),
+    status_filter: Optional[str] = Query(None, alias="status", pattern="^(all|pending|failed|dead_letter)$", description="pending / failed / dead_letter / all"),
+    webhook_url: Optional[str] = Query(None, max_length=2048, description="กรองเฉพาะ URL ปลายทางนี้ (ตรงตัว)"),
+    q: Optional[str] = Query(None, max_length=100, description="ค้นหาใน URL / อีเมล / username / ทะเบียน / จังหวัด / กล้อง"),
+    page_params: PageParams = Depends(),
     db: AsyncSession = Depends(get_db),
     admin: models.User = Depends(require_admin),
 ):
     """
     ดึงรายการ Webhook Event ที่อยู่ในคิว (pending / failed) หรือ dead_letter พร้อมข้อมูลเจ้าของ (User)
-    เพื่อให้ Admin ตรวจสอบได้ว่าคิวหรือ dead-letter ที่ค้างอยู่เป็นของ User คนไหน กล้องตัวไหน
+    แบบแบ่งหน้า (page / page_size) + กรองตาม Webhook และค้นหาได้ — webhooks ในผลลัพธ์ใช้ทำ dropdown
     """
     return await admin_service.list_queue_events(
         status_filter=status_filter,
-        limit=limit,
+        webhook_url=webhook_url,
+        search=q,
+        page_params=page_params,
         db=db,
         admin=admin,
     )

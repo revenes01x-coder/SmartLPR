@@ -1605,13 +1605,13 @@
 
 <!-- ===================== ADMIN: QUEUE & DEAD-LETTER EVENTS MODAL ===================== -->
 <style>
-  /* คอลัมน์กว้างคงที่แล้ว ข้อความยาว (อีเมล/URL) ต้องตัดคำ ไม่ให้ล้นไปทับคอลัมน์ข้างๆ */
-  #adminQueueModal td{ overflow:hidden; vertical-align:middle; }
-  /* อีเมล/ชื่อผู้ใช้ยาวๆ ให้อยู่บรรทัดเดียวแล้วตัดด้วย "..." (ดูเต็มได้จากการ hover) แถวจะได้สูงเท่ากัน */
-  #adminQueueModal td b, #adminQueueModal td div{ display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  /* ทุกช่องอยู่บรรทัดเดียว ยาวเกินก็ตัดด้วย "..." (ดูเต็มได้จาก hover หรือปุ่มรูปตา) แถวจะได้สูงเท่ากันทุกแถว */
+  #adminQueueModal td{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; vertical-align:middle; padding-top:8px; padding-bottom:8px; }
+  #adminQueueModal th{ padding-top:12px; padding-bottom:12px; }
+  #adminQueueModal td.q-actions{ text-align:center; overflow:visible; }
 </style>
 <div id="adminQueueModal" class="modal-overlay hidden" onclick="if(event.target===this)closeAdminQueueModal()">
-  <div class="modal-card" style="max-width:900px; width:95%;">
+  <div class="modal-card" style="max-width:960px; width:95%;">
     <div class="modal-head" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
       <div style="display:flex; align-items:center; gap:10px;">
         <div class="brand-mark solid" style="width:32px; height:32px;">
@@ -1641,52 +1641,71 @@
       <button type="button" class="modal-tab-btn" data-status="dead_letter" onclick="setAdminQueueFilter('dead_letter')">Dead-letter</button>
     </div>
 
-    <!-- ค้นหา + กรองตาม Webhook (กรองฝั่งหน้าเว็บจากข้อมูลที่โหลดมาแล้ว ไม่ต้องยิง API ใหม่) -->
+    <!-- ค้นหา + กรองตาม Webhook (ส่งไปกรองที่ backend จึงค้นได้ทุกรายการ ไม่ใช่แค่หน้าที่เห็นอยู่) -->
     <div style="display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap; align-items:center;">
       <div class="search-field has-clear" style="flex:1; min-width:200px;">
-        <button type="button" class="icon-btn" aria-label="ค้นหา" onclick="renderAdminQueueEvents()">
+        <button type="button" class="icon-btn" aria-label="ค้นหา" onclick="loadAdminQueueEvents(1)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         </button>
-        <input type="text" id="admin-queue-search" autocomplete="off" placeholder="ค้นหา URL / อีเมล / ทะเบียน / กล้อง..." oninput="updateSearchClear('admin-queue-search'); renderAdminQueueEvents()">
+        <input type="text" id="admin-queue-search" autocomplete="off" maxlength="100" placeholder="ค้นหา URL / อีเมล / ทะเบียน / กล้อง..." oninput="updateSearchClear('admin-queue-search'); onAdminQueueSearchInput()" onkeydown="if(event.key==='Enter'){event.preventDefault();loadAdminQueueEvents(1);}">
         <button type="button" class="clear-btn hidden" id="admin-queue-search-clear" onclick="clearAdminQueueSearch()" aria-label="ล้างคำค้นหา">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
-      <select id="admin-queue-webhook-filter" onchange="renderAdminQueueEvents()" style="width:280px; max-width:100%;">
+      <select id="admin-queue-webhook-filter" onchange="loadAdminQueueEvents(1)" style="width:280px; max-width:100%;">
         <option value="">ทุก Webhook</option>
       </select>
       <span id="admin-queue-count" style="font-size:12px; color:var(--text-secondary); white-space:nowrap;"></span>
     </div>
 
-    <!-- height (ไม่ใช่ max-height) = กล่องสูงคงที่เสมอ ไม่ยืด/หดตามจำนวนแถว ข้อมูลเกินก็เลื่อนดูในกล่อง
-         flex:0 1 380px จำเป็น เพราะ .table-scroll-wrapper มี flex:1 (= เริ่มจาก 0 แล้วโตตามเนื้อหา) ซึ่งจะทำให้ height ถูกเมิน
-         (ยอมให้หดได้ถึง 200px เฉพาะตอนจอเตี้ยมากจน modal ไม่พอ)
+    <!-- กล่องสูงคงที่ (พอดี 10 แถวบรรทัดเดียว) ไม่ยืด/หดตามจำนวนแถว
+         flex:0 1 ... จำเป็น เพราะ .table-scroll-wrapper มี flex:1 (= เริ่มจาก 0 แล้วโตตามเนื้อหา) ซึ่งจะทำให้ height ถูกเมิน
+         (ยอมให้หดได้ถึง 200px เฉพาะตอนจอเตี้ยมากจน modal ไม่พอ แล้วเลื่อนดูในกล่องแทน)
          table-layout:fixed + colgroup = ความกว้างคอลัมน์คงที่ ไม่ขยับตามความยาวข้อความ -->
-    <div class="table-scroll-wrapper" style="flex:0 1 380px; height:380px; min-height:200px; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius-sm);">
+    <div class="table-scroll-wrapper" style="flex:0 1 520px; height:520px; min-height:200px; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius-sm);">
       <table style="table-layout:fixed; width:100%;">
         <colgroup>
-          <col style="width:20%;">
-          <col style="width:17%;">
-          <col style="width:27%;">
-          <col style="width:12%;">
-          <col style="width:8%;">
-          <col style="width:16%;">
+          <col style="width:21%;">
+          <col style="width:11%;">
+          <col style="width:23%;">
+          <col style="width:14%;">
+          <col style="width:7%;">
+          <col style="width:18%;">
+          <col style="width:6%;">
         </colgroup>
         <thead>
           <tr>
             <th>User (เจ้าของ)</th>
-            <th>ทะเบียน / กล้อง</th>
+            <th>ทะเบียน</th>
             <th>URL ปลายทาง</th>
             <th>สถานะ</th>
             <th style="text-align:center;">รอบส่ง</th>
             <th>สร้างเมื่อ</th>
+            <th></th>
           </tr>
         </thead>
         <tbody id="admin-queue-tbody">
-          <tr><td colspan="6" style="text-align:center; padding:24px; color:var(--text-secondary);">กำลังโหลดข้อมูล...</td></tr>
+          <tr><td colspan="7" style="text-align:center; padding:24px; color:var(--text-secondary);">กำลังโหลดข้อมูล...</td></tr>
         </tbody>
       </table>
       <div class="empty-inline hidden" id="admin-queue-empty" style="padding:32px 0;">ไม่มี Event ค้างอยู่ในคิวขณะนี้</div>
+    </div>
+    <div class="pagination pagination-fixed" id="admin-queue-pagination" style="padding:10px 0 0;"></div>
+  </div>
+</div>
+
+<!-- ===================== ADMIN: QUEUE EVENT DETAIL (ปุ่มรูปตา) =====================
+     วางไว้ "หลัง" adminQueueModal ใน HTML เพื่อให้ลอยทับอยู่ด้านบน (z-index เท่ากัน ใครอยู่หลังชนะ) -->
+<div id="adminQueueDetailModal" class="modal-overlay hidden" onclick="if(event.target===this)closeAdminQueueDetailModal()">
+  <div class="modal-card" style="max-width:560px;">
+    <div class="modal-head">
+      <h2>รายละเอียด Event</h2>
+    </div>
+    <div class="kv-line" id="admin-queue-detail-body" style="margin-bottom:6px;"></div>
+    <div style="font-size:12px; color:var(--text-secondary); font-weight:600; margin-top:10px;">URL ปลายทาง</div>
+    <div class="terms-box mono" id="admin-queue-detail-url" style="margin-top:6px; margin-bottom:0; word-break:break-all; min-height:0; height:auto; max-height:120px;"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeAdminQueueDetailModal()">ปิด</button>
     </div>
   </div>
 </div>
@@ -5808,128 +5827,171 @@ async function loadAdminDashboard() {
 }
 
 /* ---------- ADMIN: QUEUE & DEAD-LETTER EVENTS MODAL ---------- */
+// ข้อมูลทั้งหมดดึงจาก backend ทีละหน้า (หน้าละ 10) — ค้นหา/กรอง Webhook/สถานะ ก็ส่งไปให้ backend กรองด้วย
+// จึงค้นเจอทุกรายการในฐานข้อมูล ไม่ใช่แค่ 10 รายการที่เห็นอยู่บนจอ
+const ADMIN_QUEUE_PAGE_SIZE = 10;
 let adminQueueStatusFilter = 'all';
+let adminQueuePage = 1;
+let adminQueueCache = {};        // id -> event ของหน้าปัจจุบัน (ให้ปุ่มรูปตาเปิดรายละเอียดได้โดยไม่ต้องยิง API ซ้ำ)
+let adminQueueSearchTimer = null;
+let adminQueueRequestSeq = 0;    // กันผลลัพธ์เก่ามาทับผลลัพธ์ใหม่ ตอนพิมพ์ค้นหาเร็วๆ (response อาจกลับมาไม่เรียงลำดับ)
 
 function setAdminQueueFilter(status) {
   adminQueueStatusFilter = status;
   const pills = document.querySelectorAll('#admin-queue-status-pills .modal-tab-btn');
-  pills.forEach(p => {
-    if (p.getAttribute('data-status') === status) {
-      p.classList.add('active');
-    } else {
-      p.classList.remove('active');
-    }
-  });
-  loadAdminQueueEvents();
+  pills.forEach(p => p.classList.toggle('active', p.getAttribute('data-status') === status));
+  loadAdminQueueEvents(1);   // เปลี่ยนตัวกรองแล้วต้องกลับไปหน้า 1 เสมอ (หน้าเดิมอาจไม่มีแล้ว)
 }
 
 function openAdminQueueModal() {
   document.getElementById('adminQueueModal').classList.remove('hidden');
-  loadAdminQueueEvents();
+  loadAdminQueueEvents(1);
 }
 
 function closeAdminQueueModal() {
   document.getElementById('adminQueueModal').classList.add('hidden');
 }
 
-// เก็บข้อมูลที่โหลดล่าสุดไว้ เพื่อให้ค้นหา/เลือก Webhook แล้วกรองได้ทันทีโดยไม่ต้องยิง API ซ้ำ
-let adminQueueItems = [];
+// รอให้หยุดพิมพ์ 350ms ก่อนค่อยค้นหา (debounce) ไม่งั้นพิมพ์ 10 ตัวอักษรจะยิง API 10 ครั้ง
+function onAdminQueueSearchInput() {
+  clearTimeout(adminQueueSearchTimer);
+  adminQueueSearchTimer = setTimeout(() => loadAdminQueueEvents(1), 350);
+}
 
 function clearAdminQueueSearch() {
-  const input = document.getElementById('admin-queue-search');
-  input.value = '';
+  document.getElementById('admin-queue-search').value = '';
   updateSearchClear('admin-queue-search');
-  renderAdminQueueEvents();
+  loadAdminQueueEvents(1);
 }
 
-// สร้างตัวเลือกใน dropdown จาก URL ปลายทางที่มีอยู่จริงในข้อมูล (พร้อมจำนวน event ของแต่ละอัน)
-function buildAdminQueueWebhookOptions() {
+// เติม dropdown จากรายการ webhooks ที่ backend ส่งมา (URL + จำนวน event ของแต่ละอัน)
+function buildAdminQueueWebhookOptions(webhooks) {
   const select = document.getElementById('admin-queue-webhook-filter');
   const prev = select.value;
-  const counts = {};
-  adminQueueItems.forEach(r => { counts[r.target_url] = (counts[r.target_url] || 0) + 1; });
-  const urls = Object.keys(counts).sort();
-  select.innerHTML = '<option value="">ทุก Webhook (' + adminQueueItems.length + ')</option>'
-    + urls.map(u => `<option value="${escapeHtml(u)}">${escapeHtml(u)} (${counts[u]})</option>`).join('');
-  // ถ้า Webhook ที่เลือกไว้ยังมีอยู่ ให้คงค่าเดิม (กดรีเฟรชแล้วตัวกรองไม่หาย)
-  select.value = urls.includes(prev) ? prev : '';
-}
-
-async function loadAdminQueueEvents() {
-  const tbody = document.getElementById('admin-queue-tbody');
-  const empty = document.getElementById('admin-queue-empty');
-  empty.classList.add('hidden');
-  tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding: 24px; color: var(--text-secondary);">กำลังโหลดข้อมูล...</td></tr>';
-
-  try {
-    const url = `/admin/queue-events${adminQueueStatusFilter !== 'all' ? `?status=${encodeURIComponent(adminQueueStatusFilter)}` : ''}`;
-    adminQueueItems = (await apiCall(url)) || [];
-    buildAdminQueueWebhookOptions();
-    renderAdminQueueEvents();
-  } catch (e) {
-    adminQueueItems = [];
-    document.getElementById('admin-queue-count').textContent = '';
-    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding: 20px; color: var(--danger-fg);">เกิดข้อผิดพลาด: ${escapeHtml(e.message || 'โหลดข้อมูลไม่สำเร็จ')}</td></tr>`;
+  const total = webhooks.reduce((sum, w) => sum + w.count, 0);
+  select.innerHTML = `<option value="">ทุก Webhook (${total})</option>`
+    + webhooks.map(w => `<option value="${escapeHtml(w.target_url)}">${escapeHtml(w.target_url)} (${w.count})</option>`).join('');
+  // ถ้า Webhook ที่เลือกไว้ยังมีอยู่ ให้คงค่าเดิม (กดรีเฟรช/เปลี่ยนหน้าแล้วตัวกรองไม่หาย)
+  if (prev && !webhooks.some(w => w.target_url === prev)) {
+    // URL ที่เลือกไม่มี event เหลือแล้ว (เช่นส่งสำเร็จหมด) — ยังคงโชว์ไว้ให้รู้ว่ากำลังกรองอยู่
+    select.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(prev)}">${escapeHtml(prev)} (0)</option>`);
   }
+  select.value = prev;
 }
 
-// วาดตารางจาก adminQueueItems โดยกรองตาม Webhook ที่เลือก + คำค้นหา
-function renderAdminQueueEvents() {
+function adminQueueStatusBadge(status) {
+  const dot = '<span style="width:6px;height:6px;border-radius:50%;background:currentColor;"></span>';
+  if (status === 'pending') return `<span class="badge" style="background:var(--blue-50); color:var(--blue-600);">${dot}Pending</span>`;
+  if (status === 'failed') return `<span class="badge warn">${dot}Retrying</span>`;
+  if (status === 'dead_letter') return `<span class="badge danger">${dot}Dead-letter</span>`;
+  return `<span class="badge neutral">${escapeHtml(status)}</span>`;
+}
+
+async function loadAdminQueueEvents(page = adminQueuePage) {
+  adminQueuePage = page;
+  const seq = ++adminQueueRequestSeq;
   const tbody = document.getElementById('admin-queue-tbody');
   const empty = document.getElementById('admin-queue-empty');
   const webhook = document.getElementById('admin-queue-webhook-filter').value;
-  const q = document.getElementById('admin-queue-search').value.trim().toLowerCase();
-
-  const items = adminQueueItems.filter(r => {
-    if (webhook && r.target_url !== webhook) return false;
-    if (!q) return true;
-    return [r.target_url, r.user_email, r.user_username, r.license_plate, r.province, r.camera_id]
-      .some(v => v && String(v).toLowerCase().includes(q));
-  });
-
-  const filtered = webhook || q;
-  document.getElementById('admin-queue-count').textContent = filtered
-    ? `แสดง ${items.length} จาก ${adminQueueItems.length} รายการ`
-    : `${adminQueueItems.length} รายการ`;
-
-  if (!items.length) {
-    tbody.innerHTML = '';
-    empty.textContent = filtered ? 'ไม่พบ Event ที่ตรงกับการค้นหา' : 'ไม่มี Event ค้างอยู่ในคิวขณะนี้';
-    empty.classList.remove('hidden');
-    return;
-  }
+  const q = document.getElementById('admin-queue-search').value.trim();
   empty.classList.add('hidden');
+  tbody.innerHTML = skeletonTableRows(7, ADMIN_QUEUE_PAGE_SIZE);
+
+  const params = new URLSearchParams({ page: String(page), page_size: String(ADMIN_QUEUE_PAGE_SIZE) });
+  if (adminQueueStatusFilter !== 'all') params.set('status', adminQueueStatusFilter);
+  if (webhook) params.set('webhook_url', webhook);
+  if (q) params.set('q', q);
+
+  try {
+    const res = await apiCall(`/admin/queue-events?${params.toString()}`);
+    if (seq !== adminQueueRequestSeq) return;   // มีคำขอใหม่กว่าแล้ว ทิ้งผลลัพธ์นี้
+
+    // เช่นอยู่หน้า 3 แล้วรายการถูกส่งสำเร็จจนเหลือแค่ 2 หน้า -> ถอยไปหน้าสุดท้ายที่มีจริง
+    if (res.total_pages > 0 && page > res.total_pages) {
+      return loadAdminQueueEvents(res.total_pages);
+    }
+
+    buildAdminQueueWebhookOptions(res.webhooks || []);
+    renderAdminQueueRows(res.items || []);
+
+    const filtered = webhook || q;
+    document.getElementById('admin-queue-count').textContent = res.total
+      ? `${filtered ? 'พบ ' : ''}${res.total} รายการ`
+      : '';
+    if (!res.total) {
+      empty.textContent = filtered ? 'ไม่พบ Event ที่ตรงกับการค้นหา' : 'ไม่มี Event ค้างอยู่ในคิวขณะนี้';
+      empty.classList.remove('hidden');
+    }
+    renderPagination('admin-queue-pagination', res.page, res.total_pages, 'loadAdminQueueEvents');
+  } catch (e) {
+    if (seq !== adminQueueRequestSeq) return;
+    adminQueueCache = {};
+    document.getElementById('admin-queue-count').textContent = '';
+    document.getElementById('admin-queue-pagination').innerHTML = '';
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; padding: 20px; color: var(--danger-fg);">เกิดข้อผิดพลาด: ${escapeHtml(e.message || 'โหลดข้อมูลไม่สำเร็จ')}</td></tr>`;
+  }
+}
+
+// แต่ละแถวโชว์แค่ข้อมูลหลักบรรทัดเดียว — ข้อมูลรอง (username, จังหวัด, กล้อง, event id ฯลฯ) ย้ายไปอยู่ในปุ่มรูปตา
+function renderAdminQueueRows(items) {
+  const tbody = document.getElementById('admin-queue-tbody');
+  adminQueueCache = {};
+  items.forEach(r => { adminQueueCache[r.id] = r; });
 
   tbody.innerHTML = items.map(r => {
-      let badgeHtml = '';
-      if (r.status === 'pending') {
-        badgeHtml = `<span class="badge" style="background:var(--blue-50); color:var(--blue-600);"><span style="width:6px;height:6px;border-radius:50%;background:currentColor;"></span>Pending</span>`;
-      } else if (r.status === 'failed') {
-        badgeHtml = `<span class="badge warn"><span style="width:6px;height:6px;border-radius:50%;background:currentColor;"></span>Retrying</span>`;
-      } else if (r.status === 'dead_letter') {
-        badgeHtml = `<span class="badge danger"><span style="width:6px;height:6px;border-radius:50%;background:currentColor;"></span>Dead-letter</span>`;
-      } else {
-        badgeHtml = `<span class="badge neutral">${escapeHtml(r.status)}</span>`;
-      }
+    const userHtml = r.user_email
+      ? `<b title="${escapeHtml(r.user_email)}">${escapeHtml(r.user_email)}</b>`
+      : `<span style="color:var(--text-secondary); font-style:italic;">(ไม่มีผู้ใช้/ถูกลบ)</span>`;
+    const plateHtml = r.license_plate
+      ? `<span style="font-weight:700; color:var(--violet-700);" title="${escapeHtml(r.license_plate + (r.province ? ' ' + r.province : ''))}">${escapeHtml(r.license_plate)}</span>`
+      : `<span style="color:var(--text-secondary);">—</span>`;
+    // ส่ง id ผ่าน data-attribute แทนการแปะลงใน onclick ตรงๆ — id เป็น string อาจมีอักขระพิเศษที่ทำให้ JS พัง
+    return `
+      <tr>
+        <td>${userHtml}</td>
+        <td>${plateHtml}</td>
+        <td><span class="url-cell" style="max-width:100%;" title="${escapeHtml(r.target_url)}">${escapeHtml(r.target_url)}</span></td>
+        <td>${adminQueueStatusBadge(r.status)}</td>
+        <td style="text-align:center; font-weight:600;">${r.attempt_count}</td>
+        <td style="font-size:12px; color:var(--text-secondary);">${formatDate(r.created_at)}</td>
+        <td class="q-actions">
+          <button class="btn btn-xs btn-icon" data-id="${escapeHtml(r.id)}" onclick="openAdminQueueDetailModal(this.dataset.id)" title="ดูรายละเอียด" aria-label="ดูรายละเอียด">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </td>
+      </tr>`;
+  }).join('');
+}
 
-      const userHtml = r.user_email
-        ? `<div style="line-height:1.3;"><b title="${escapeHtml(r.user_email)}">${escapeHtml(r.user_email)}</b>${r.user_username ? `<div style="font-size:11px; color:var(--text-secondary);">@${escapeHtml(r.user_username)}</div>` : ''}</div>`
-        : `<span style="color:var(--text-secondary); font-style:italic;">(ไม่มีผู้ใช้/ถูกลบ)</span>`;
+function openAdminQueueDetailModal(id) {
+  const r = adminQueueCache[id];
+  const body = document.getElementById('admin-queue-detail-body');
+  const urlBox = document.getElementById('admin-queue-detail-url');
+  document.getElementById('adminQueueDetailModal').classList.remove('hidden');
+  if (!r) {
+    body.textContent = 'ไม่พบข้อมูลรายการนี้ กรุณาปิดหน้าต่างแล้วกดรีเฟรชตารางอีกครั้ง';
+    urlBox.textContent = '-';
+    return;
+  }
+  const userText = r.user_email
+    ? `<b>${escapeHtml(r.user_email)}</b>${r.user_username ? ` (@${escapeHtml(r.user_username)})` : ''}`
+    : '<i>(ไม่มีผู้ใช้/ถูกลบ)</i>';
+  body.innerHTML = `
+    สถานะ: ${adminQueueStatusBadge(r.status)}<br>
+    รอบที่ส่งไปแล้ว: <b>${r.attempt_count}</b><br>
+    ลองส่งใหม่ครั้งถัดไป: <b>${r.next_retry_at ? formatDate(r.next_retry_at) : '-'}</b><br>
+    ผู้ใช้ (เจ้าของ): ${userText}<br>
+    ทะเบียน: <b>${escapeHtml(r.license_plate || '-')}</b>${r.province ? ` <b>${escapeHtml(r.province)}</b>` : ''}<br>
+    กล้อง: <b>${escapeHtml(r.camera_id || '-')}</b><br>
+    Event ID: <b>${escapeHtml(r.id)}</b><br>
+    Source Event ID: <b>${escapeHtml(r.source_event_id || '-')}</b><br>
+    สร้างเมื่อ: <b>${formatDate(r.created_at)}</b>
+  `;
+  urlBox.textContent = r.target_url;
+}
 
-      const plateHtml = r.license_plate
-        ? `<div><span style="font-weight:700; font-size:13px; color:var(--violet-700);">${escapeHtml(r.license_plate)}</span>${r.province ? ` <span style="font-size:11px; color:var(--text-secondary);">${escapeHtml(r.province)}</span>` : ''}<div style="font-size:11px; color:var(--text-secondary); font-family:var(--font-mono);">${escapeHtml(r.camera_id || '—')}</div></div>`
-        : `<div style="font-family:var(--font-mono); font-size:12px;">${escapeHtml(r.camera_id || '—')}</div>`;
-
-      return `
-        <tr>
-          <td>${userHtml}</td>
-          <td>${plateHtml}</td>
-          <td><div class="url-cell" style="max-width:100%;" title="${escapeHtml(r.target_url)}">${escapeHtml(r.target_url)}</div></td>
-          <td>${badgeHtml}</td>
-          <td style="text-align:center; font-weight:600;">${r.attempt_count}</td>
-          <td style="font-size:12px; color:var(--text-secondary); white-space:nowrap;">${formatDate(r.created_at)}</td>
-        </tr>`;
-    }).join('');
+function closeAdminQueueDetailModal() {
+  document.getElementById('adminQueueDetailModal').classList.add('hidden');
 }
 
 /* ---------- ADMIN: ACCESS REQUESTS ---------- */

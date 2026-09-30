@@ -863,6 +863,22 @@ class AdminQueueEventItem(BaseModel):
         from_attributes = True
 
 
+class AdminQueueWebhookOption(BaseModel):
+    """ตัวเลือกใน dropdown "กรองตาม Webhook" — URL ปลายทาง + จำนวน event ที่ค้างอยู่ของ URL นั้น"""
+    target_url: str
+    count: int
+
+
+class AdminQueueEventPage(BaseModel):
+    """ผลลัพธ์แบบแบ่งหน้าของคิว — หน้าตาเหมือน PaginatedResponse ทุกตาราง + webhooks สำหรับทำ dropdown"""
+    items: List[AdminQueueEventItem]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    webhooks: List[AdminQueueWebhookOption]
+
+
 class ContactChannelResponse(BaseModel):
     id: int
     label: str
