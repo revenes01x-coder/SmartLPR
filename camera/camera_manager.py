@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import signal
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -123,17 +125,7 @@ def spawn_camera_process(
 
 
 def _stop_processes(items: list[tuple[str, mp.Process, mp.Event]], reason: str) -> set[int]:
-    """สั่งหยุดโปรเซสแบบ graceful (set stop event แล้วรอให้ออกเอง) — ทุกตัวพร้อมกัน
-
-    [สำคัญ]: ห้ามใช้ process.terminate() เป็นวิธีหลัก เพราะโปรเซสใช้ frame_queue (mp.Queue)
-    ร่วมกัน ถ้า terminate ตอนโปรเซสนั้นถือ lock ของคิวอยู่ (กำลัง put เฟรม หรือกำลัง get)
-    lock จะค้างถาวร -> โปรเซสอื่นที่ใช้คิวเดียวกันส่ง/รับเฟรมไม่ได้อีกเลย การตรวจจับป้ายหยุด
-    ทั้งที่โปรเซสยังไม่ตาย (camera_manager มองไม่เห็นว่าเสีย) ดูเอกสาร Python:
-    multiprocessing.Process.terminate()
-
-    คืน set ของตำแหน่ง (index ใน items) ที่ต้องบังคับ kill — set ว่าง = ทุกตัวหยุดเองได้
-    ถ้าไม่ว่าง คิวที่โปรเซสตัวนั้นใช้อยู่อาจเสียแล้ว caller ต้องสร้างคิวใหม่
-    """
+    
     for identifier, process, stop_event in items:
         if process.is_alive():
             logger.info(f"โปรเซส {identifier}: {reason} -> สั่งหยุด (pid={process.pid})")
@@ -334,5 +326,27 @@ def main():
         )
 
 
+def _install_sigterm_handler() -> None:
+    """แปลง SIGTERM (ที่ docker stop ส่งมา) เป็น SystemExit เพื่อให้ except/finally ใน main() ได้ทำงาน
+
+    [ทำไมต้องมี]: Python ไม่แปลง SIGTERM เป็น exception ให้เอง และใน container โปรเซสนี้เป็น PID 1
+    ซึ่ง kernel จะเมิน SIGTERM ถ้าไม่มี handler -> Docker รอจนหมดเวลาแล้ว SIGKILL ทิ้ง
+    ทำให้โค้ดปิด streamer/worker อย่างเรียบร้อยใน finally ไม่เคยได้ทำงาน"""
+    main_pid = os.getpid()
+
+    def _handle_sigterm(signum, frame):
+        if os.getpid() != main_pid:
+            # โปรเซสลูกที่ fork ออกไปได้ handler นี้ติดไปด้วย -> ให้ทำตัวเหมือนเดิม (ตายตาม SIGTERM ปกติ)
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return
+        # กัน SIGTERM ซ้ำมาขัดจังหวะตอนกำลังเก็บกวาดใน finally
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+
+
 if __name__ == "__main__":
+    _install_sigterm_handler()
     main()

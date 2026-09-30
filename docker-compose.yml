@@ -66,6 +66,9 @@ services:
       dockerfile: Dockerfile.camera
     container_name: smartlpr-camera
     restart: unless-stopped
+    # ให้เวลาปิดอย่างเรียบร้อย: ปิด streamer (สูงสุด 30+10 วิ) แล้วค่อยปิด AI worker (สูงสุด 30+10 วิ)
+    # ค่าเริ่มต้นของ Docker คือ 10 วิ ไม่พอ -> โดน SIGKILL กลางคัน
+    stop_grace_period: 90s
     env_file:
       - .env
     environment:
