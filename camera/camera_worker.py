@@ -11,7 +11,6 @@ import queue
 import logging
 import difflib
 import datetime
-import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import cv2 as cv
@@ -367,7 +366,6 @@ class PlateCluster:
     def __init__(self, camera_id: str, candidate: dict, now: float):
         self.camera_id = camera_id
         self.start_time = now
-        self.last_seen = now
         self.candidates = [candidate]
         self.event_id = uuid.uuid4().hex  # รหัสเหตุการณ์เฉพาะของรถคันนี้
 
@@ -379,7 +377,6 @@ class PlateCluster:
 
     def add_candidate(self, candidate: dict, now: float):
         self.candidates.append(candidate)
-        self.last_seen = now
 
 
 def finalize_cluster(
@@ -506,7 +503,7 @@ def run_inference_worker(frame_queue, stop_event=None):
             now = time.time()
 
             if item is not QUEUE_TIMEOUT_SENTINEL:
-                camera_id, frame, frame_ts, delay = item
+                camera_id, frame, _, delay = item
                 delay_by_cam[camera_id] = delay
 
                 save_dir_full = os.path.join(SAVE_DIR_ROOT, f"camera_{camera_id}", "full")

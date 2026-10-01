@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query, BackgroundTasks, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List, Optional
+from typing import Optional
 from smartlpr import models
 import smartlpr.schemas as schemas
 from smartlpr.database import get_db

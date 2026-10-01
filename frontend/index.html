@@ -209,14 +209,6 @@
   html[data-theme="light"] .theme-toggle-opt.opt-dark:hover{ color:var(--text-primary); }
   html[data-theme="dark"] .theme-toggle-opt.opt-light:hover{ color:var(--text-primary); }
 
-  .theme-toggle.on-brand{ background:var(--brand-toggle-bg); border-color:var(--brand-toggle-border); }
-  .theme-toggle.on-brand .theme-toggle-thumb{ background:#fff; box-shadow:0 1px 6px rgba(8,5,20,.35); }
-  .theme-toggle.on-brand .theme-toggle-opt{ color:var(--brand-text-soft); }
-  html[data-theme="light"] .theme-toggle.on-brand .theme-toggle-opt.opt-light{ color:#241659; }
-  html[data-theme="dark"] .theme-toggle.on-brand .theme-toggle-opt.opt-dark{ color:#241659; }
-  html[data-theme="light"] .theme-toggle.on-brand .theme-toggle-opt.opt-dark:hover{ color:#fff; }
-  html[data-theme="dark"] .theme-toggle.on-brand .theme-toggle-opt.opt-light:hover{ color:#fff; }
-
   /* [Sidebar Logout Btn]: ปุ่มออกจากระบบทางลัดท้าย sidebar (ปุ่มหลักยังอยู่ที่ account-bar
      มุมขวาบนเหมือนเดิม อันนี้เป็นทางลัดเพิ่มเติมสำหรับคนที่เปิด sidebar อยู่แล้วไม่อยากเลื่อนไปหา
      account-bar) สไตล์ใช้ padding/font-size เดียวกับ .nav-item ด้านบนทุกประการ (ไม่มีกรอบ/พื้นหลัง
@@ -234,13 +226,6 @@
   }
   .sidebar-logout-btn:hover{ background:rgba(255,107,98,.18); color:#fff; }
   .sidebar-logout-btn svg{ width:17px; height:17px; opacity:.85; flex-shrink:0; }
-
-  /* [Profile Theme Row]: แถวสลับโหมดสว่าง/มืดในหน้าโปรไฟล์ — ใช้ class "user-menu-item" ตัวเดียว
-     กับปุ่ม "โปรไฟล์ของฉัน"/"เปลี่ยนรหัสผ่าน" ใน account-bar dropdown ทุกประการ (ไม่ต้องเพิ่ม CSS
-     ใหม่) กดตรงไหนของแถวก็สลับโหมดทันที (toggleTheme()) ไอคอน/ข้อความจะบอกว่ากดแล้วจะได้โหมด
-     อะไร (ตรงข้ามกับโหมดปัจจุบันเสมอ) อัปเดตอัตโนมัติผ่าน syncProfileThemeBar() ทุกครั้งที่
-     setTheme() ถูกเรียก ไม่ว่าจะสลับจากที่ไหนก็ตาม */
-  #profileThemeBar{ cursor:pointer; }
 
   /* ============================================================
      AUTH SCREEN — split brand / form
@@ -786,9 +771,8 @@
     box-shadow: var(--shadow-sm); padding:14px 18px;
   }
   .topbar h1{ font-size:24px; font-weight:800; margin:0; letter-spacing:-0.015em; }
-  .topbar-actions{ display:flex; gap:10px; align-items:center; flex-shrink:0; }
-  /* ดันทุกอย่างหลังหัวข้อ (topbar-actions ถ้ามี + .account-bar ที่ถูกย้ายเข้ามา) ไปชิดขวา
-     ให้อยู่ระนาบเดียวกับ h1 เสมอ ไม่ว่าหน้านั้นจะมี topbar-actions หรือไม่ก็ตาม */
+  /* ดันทุกอย่างหลังหัวข้อ (.account-bar ที่ถูกย้ายเข้ามา) ไปชิดขวา
+     ให้อยู่ระนาบเดียวกับ h1 เสมอ */
   .topbar > *:first-child{ margin-right:auto; }
 
   /* [Topbar Hamburger]: ไอคอน 3 ขีดอยู่หน้าหัวข้อของทุกหน้า คู่กับ h1 อยู่ใน .topbar-title
@@ -807,13 +791,6 @@
   }
   .topbar-hamburger:hover{ background:var(--surface-hover); color:var(--text-primary); }
   .topbar-hamburger svg{ width:19px; height:19px; }
-
-  .live-chip{
-    display:inline-flex; align-items:center; gap:6px; font-size:11.5px; font-weight:600;
-    padding:6px 10px 6px 8px; border-radius:20px;
-  }
-  .live-chip.up{ color:var(--success-fg); background:var(--success-bg); }
-  .live-chip.down{ color:var(--danger-fg); background:var(--danger-bg); }
 
   /* ---------- Page transition — replays whenever a .page loses .hidden ---------- */
   .page{ animation: pageIn .4s var(--ease) both; }
@@ -838,7 +815,7 @@
   .signal.off .core{ background:var(--text-tertiary); box-shadow:none; }
   .signal.up::before{ content:""; position:absolute; inset:-6px; border-radius:50%; border:1.5px solid var(--success-dot); opacity:0; animation:signal-ping 2.2s cubic-bezier(0,0,.2,1) infinite; }
   @keyframes signal-ping{ 0%{transform:scale(.6);opacity:.55;} 75%{transform:scale(2.1);opacity:0;} 100%{opacity:0;} }
-  @media (prefers-reduced-motion: reduce){ .signal.up::before, .signal-ring .ring{ animation:none; } }
+  @media (prefers-reduced-motion: reduce){ .signal.up::before{ animation:none; } }
   .status-row{ display:flex; align-items:center; gap:8px; }
   .status-text{ font-size:12.5px; font-weight:600; }
   .status-text.up{ color:var(--success-fg); }
@@ -904,24 +881,6 @@
 
   .empty-inline{ font-size:12.5px; color:var(--text-tertiary); padding:18px 0; text-align:center; }
   .footnote{ font-size:11.5px; color:var(--text-tertiary); padding:12px 18px 4px; }
-
-  /* ---------- Dashboard stat cards (ADMIN: DASHBOARD) ---------- */
-  .stat-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:12px; }
-  .stat-card{
-    border:1px solid var(--border); border-radius: var(--radius-sm); padding:14px 16px;
-    background:var(--surface-sunken);
-    transition: box-shadow .15s ease, transform .15s ease, border-color .15s ease, background-color .15s ease;
-  }
-  .stat-card-value{ font-family:"IBM Plex Mono",monospace; font-size:26px; font-weight:700; line-height:1.15; color:var(--text-primary); }
-  .stat-card-label{ font-size:12.5px; font-weight:600; color:var(--text-secondary); margin-top:6px; }
-  .stat-card-hint{ font-size:11px; color:var(--text-tertiary); margin-top:6px; line-height:1.5; }
-  .stat-card.stat-success .stat-card-value{ color:var(--success-fg); }
-  .stat-card.stat-danger .stat-card-value{ color:var(--danger-fg); }
-  .stat-card.stat-warn .stat-card-value{ color:var(--warn-fg); }
-  .stat-card-clickable{ cursor:pointer; }
-  .stat-card-clickable:hover{ box-shadow:var(--shadow-sm); border-color:var(--border-strong); transform:translateY(-1px); background:var(--surface-hover); }
-  .stat-card-clickable:focus-visible{ outline:2px solid var(--violet-500); outline-offset:2px; }
-  .dash-group-gap{ height:2px; }
 
   /* ---------- Admin dashboard v2: KPI cards + charts (English, FinSet-style layout) ---------- */
   .dash-kpi-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:16px; margin-bottom:24px; }
@@ -1094,38 +1053,6 @@
     .topbar h1{ font-size:20px; }
   }
 
-  /* Profile Page Redesign */
-  .profile-hero {
-    display: flex; align-items: center; gap: 24px; padding-bottom: 24px;
-    margin-bottom: 24px; border-bottom: 1px solid var(--border);
-  }
-  .profile-avatar-large {
-    width: 72px; height: 72px; border-radius: 50%;
-    background: var(--brand-toggle-bg); color: var(--brand-text);
-    font-size: 28px; font-weight: 600; display: flex;
-    align-items: center; justify-content: center; flex-shrink: 0;
-  }
-  html[data-theme="light"] .profile-avatar-large {
-    background: var(--violet-500, #6366f1); color: #fff;
-  }
-  .profile-hero-info h2 { margin: 0 0 4px 0; font-size: 22px; color: var(--text-primary); letter-spacing: -0.01em; }
-  .profile-hero-info p { margin: 0; color: var(--text-secondary); font-size: 14.5px; }
-  .profile-details-grid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;
-  }
-  .profile-detail-card {
-    background: var(--surface-sunken); padding: 16px; border-radius: var(--radius-md);
-    border: 1px solid var(--border); transition: transform 0.2s ease, box-shadow 0.2s ease;
-  }
-  .profile-detail-card:hover {
-    transform: translateY(-2px); box-shadow: var(--shadow-sm); border-color: var(--border-strong);
-  }
-  .profile-detail-label {
-    font-size: 11.5px; color: var(--text-tertiary); text-transform: uppercase;
-    letter-spacing: 0.05em; margin-bottom: 8px; font-weight: 600;
-  }
-  .profile-detail-value { font-size: 14px; color: var(--text-primary); font-weight: 500; }
-  .profile-detail-value b { color: var(--text-primary); font-weight: 600; }
   /* Hide hamburger on desktop */
   @media (min-width: 993px) {
     .topbar-hamburger {
@@ -2367,9 +2294,7 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V8a5 5 0 0 1 10 0v3"/></svg>
             เปลี่ยนรหัสผ่าน
           </div>
-          <!-- [Theme Row]: สลับโหมดสว่าง/มืด — จุดเดียวที่เหลืออยู่ในระบบ (เดิมมีอีกจุดในหน้า
-               โปรไฟล์ #profileThemeBar ถูกเอาออกแล้วตามคำขอ) toggleTheme() + syncProfileThemeBar()
-               ยังเก็บโค้ดรองรับ id "profileThemeBar*" ไว้เฉยๆ แบบ null-safe เผื่ออนาคตอยากเพิ่มกลับ -->
+          <!-- [Theme Row]: สลับโหมดสว่าง/มืด — จุดเดียวในระบบ toggleTheme() + syncProfileThemeBar() -->
           <div class="user-menu-item" id="userMenuThemeBar" onclick="toggleTheme()" role="button" tabindex="0"
                onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleTheme();}">
             <span id="userMenuThemeIcon" aria-hidden="true"></span>
@@ -3449,8 +3374,7 @@ function hideAlert(id) {
 /* ============================================================
    THEME — light/dark switch, จำค่าไว้ใน localStorage (ค่าเริ่มต้นถูกตั้งไว้แล้วก่อน paint
    ผ่าน inline script บน <head> กันแฟลชสีผิด) ตัวควบคุมอยู่ที่ #userMenuThemeBar ใน account-bar
-   dropdown (มุมขวาบน) จุดเดียว (เดิมมี #profileThemeBar ในหน้าโปรไฟล์อีกจุด ถูกเอาออกแล้ว —
-   syncProfileThemeBar() ด้านล่างยังเช็ค null ไว้เผื่อ id นั้นไม่มีอยู่ใน DOM) แค่ตั้ง data-theme
+   dropdown (มุมขวาบน) จุดเดียว แค่ตั้ง data-theme
    ให้ตรงกับโหมดที่ต้องการ ก้อนสีของ thumb จะเลื่อนไปเองอัตโนมัติผ่าน CSS transition ไม่ต้องพึ่ง JS
    ============================================================ */
 function currentTheme() {
@@ -3462,15 +3386,15 @@ function setTheme(theme) {
   try { localStorage.setItem('smartlpr_theme', next); } catch (e) { /* localStorage ปิดอยู่ — ข้ามการจำค่าไปเฉยๆ */ }
   syncProfileThemeBar();
 }
-// สลับโหมดกลับไปกลับมา — เรียกจากแถว #profileThemeBar ในหน้าโปรไฟล์ กดครั้งเดียวแล้วเปลี่ยนเลย
+// สลับโหมดกลับไปกลับมา — เรียกจากแถว #userMenuThemeBar ใน account-bar กดครั้งเดียวแล้วเปลี่ยนเลย
 function toggleTheme() {
   setTheme(currentTheme() === 'dark' ? 'light' : 'dark');
 }
-// ไอคอน sun/moon สลับกันแสดงใน #profileThemeBarIcon ตามโหมด "ที่จะได้ถ้ากด" (ไม่ใช่โหมดปัจจุบัน)
+// ไอคอน sun/moon สลับกันแสดงใน #userMenuThemeIcon ตามโหมด "ที่จะได้ถ้ากด" (ไม่ใช่โหมดปัจจุบัน)
 const THEME_ROW_ICON_SUN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>';
 const THEME_ROW_ICON_MOON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
-// อัปเดตไอคอน + ข้อความของแถวสลับโหมดทั้ง 2 จุด (หน้าโปรไฟล์ #profileThemeBar และ account-bar
-// dropdown #userMenuThemeBar) ให้บอกว่า "กดแล้วจะได้โหมดอะไร" เสมอ (ตรงข้ามกับ data-theme ปัจจุบัน)
+// อัปเดตไอคอน + ข้อความของแถวสลับโหมดใน account-bar
+// dropdown #userMenuThemeBar ให้บอกว่า "กดแล้วจะได้โหมดอะไร" เสมอ (ตรงข้ามกับ data-theme ปัจจุบัน)
 // เรียกทุกครั้งที่ setTheme() ทำงาน ไม่ว่าจะสลับจากจุดไหน — ถ้ายังไม่เคยเปิดหน้าโปรไฟล์เลย
 // องค์ประกอบนั้นก็มีอยู่ใน DOM แล้ว (ถูกซ่อนด้วย class "hidden" เท่านั้น ไม่ได้ถูกลบ) จึงเช็ค
 // null ทีละคู่ก่อนอัปเดต กันกรณีจุดใดจุดหนึ่งหายไปในอนาคต
@@ -3478,13 +3402,6 @@ function syncProfileThemeBar() {
   const isDark = currentTheme() === 'dark';
   const iconHtml = isDark ? THEME_ROW_ICON_SUN : THEME_ROW_ICON_MOON;
   const labelText = isDark ? 'สลับเป็นโหมดสว่าง' : 'สลับเป็นโหมดมืด';
-
-  const profileIcon = document.getElementById('profileThemeBarIcon');
-  const profileLabel = document.getElementById('profileThemeBarLabel');
-  if (profileIcon && profileLabel) {
-    profileIcon.innerHTML = iconHtml;
-    profileLabel.textContent = labelText;
-  }
 
   const menuIcon = document.getElementById('userMenuThemeIcon');
   const menuLabel = document.getElementById('userMenuThemeLabel');
@@ -5589,16 +5506,6 @@ function goToAdminPage(pageName) {
   loadPage(pageName);
 }
 
-// การ์ด "คำขอใช้งานที่รอพิจารณา" ต้องพาไปหน้า admin-access พร้อม filter สถานะ = รออนุมัติ
-// (เป็นค่า default ของ select อยู่แล้วตอนโหลดหน้าครั้งแรก แต่ตั้งให้ชัดเจนซ้ำ เผื่อ user
-// เคยเปลี่ยน filter ค้างไว้จากรอบก่อนในหน้าเดียวกัน)
-function goToAdminAccessPending() {
-  switchToPage('admin-access');
-  const sel = document.getElementById('admin-ar-filter');
-  if (sel) sel.value = 'pending';
-  loadAdminAccessRequests(1);
-}
-
 /* ============================================================
    ADMIN DASHBOARD v2 — English only (per design request), chart-based, kept minimal:
    4 clickable KPI cards + 1 grouped bar chart + 1 donut chart. Replaces the old
@@ -6009,9 +5916,7 @@ async function loadAdminAccessRequests(page = adminArPage) {
   const statusFilter = document.getElementById('admin-ar-filter').value; // '' = ทั้งหมด
   updateFilterBadge('ar', statusFilter ? 1 : 0); // '' (ทั้งหมด) ถือว่าไม่ได้กรอง
   try {
-    const sortBtn = document.getElementById('admin-ar-sort-order');
-    const order = sortBtn ? sortBtn.value : 'desc';
-    const res = await apiCall(`/admin/access-requests?status=${encodeURIComponent(statusFilter)}&order=${order}&page=${page}&page_size=${PAGE_SIZE}`);
+    const res = await apiCall(`/admin/access-requests?status=${encodeURIComponent(statusFilter)}&order=desc&page=${page}&page_size=${PAGE_SIZE}`);
     const items = res.items || [];
     document.getElementById('admin-ar-sub').textContent = res.total ? `${res.total} คำขอ` : 'ไม่มีคำขอในหมวดนี้';
     refreshAdminAccessBadge();
@@ -6960,8 +6865,6 @@ async function loadAdminAuditLog(page = adminAuditPage) {
   empty.classList.add('hidden');
   let curr = tbody.querySelectorAll('tr:not(.empty-inline):not(.skel-row)').length || 5; tbody.innerHTML = skeletonTableRows(6, Math.min(curr, 15));
   document.getElementById('admin-audit-pagination').innerHTML = '';
-  const topPagination = document.getElementById('admin-audit-pagination-top');
-  if (topPagination) topPagination.innerHTML = '';
 
   // action/target_type อ่านตรงจาก <select> ทุกครั้ง (ตาม pattern เดียวกับ admin-ar-filter)
   const actionFilter = document.getElementById('admin-audit-action-filter').value;
@@ -7012,7 +6915,6 @@ async function loadAdminAuditLog(page = adminAuditPage) {
       </tr>`;
     }).join('');
     renderPagination('admin-audit-pagination', res.page, res.total_pages, 'loadAdminAuditLog');
-    renderPagination('admin-audit-pagination-top', res.page, res.total_pages, 'loadAdminAuditLog');
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="6" class="empty-inline">โหลดไม่สำเร็จ: ${escapeHtml(e.message || '')}</td></tr>`;
   }

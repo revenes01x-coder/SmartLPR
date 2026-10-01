@@ -1,4 +1,3 @@
-import asyncio
 from services.email_service import _send_email
 
 try:

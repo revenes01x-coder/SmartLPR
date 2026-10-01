@@ -84,7 +84,6 @@ USERNAME_CHANGE_LOCKOUT_MINUTES = 7 * 24 * 60
 
 # [Change Email]: Cooldown 7 วันเช่นเดียวกับ username — อีเมลคือ "ตัวตนหลัก" ของบัญชี
 # จำกัดถี่กว่านี้ไม่ได้ประโยชน์ และอาจเป็นปัญหาถ้า user จำเป็นต้องเปลี่ยนจริงๆ
-EMAIL_CHANGE_LOCKOUT_LIMIT = 1
 EMAIL_CHANGE_LOCKOUT_MINUTES = 7 * 24 * 60
 
 

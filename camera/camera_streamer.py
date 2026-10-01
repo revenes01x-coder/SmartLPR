@@ -33,19 +33,19 @@ def _wait_or_stop(stop_event, seconds: float) -> bool:
 def _open_capture(url: str):
     """เปิด VideoCapture ผ่าน FFmpeg พร้อม timeout ตอนเปิด/อ่าน (OpenCV >= 4.6)
     ถ้า OpenCV รุ่นเก่าไม่มี property พวกนี้ ถอยกลับไปเปิดแบบเดิม"""
-    open_timeout = getattr(cv, "CAP_PROP_OPEN_TIMEOUT_MSEC", None)
-    read_timeout = getattr(cv, "CAP_PROP_READ_TIMEOUT_MSEC", None)
+    open_timeout = getattr(cv, "CAP_PROP_OPEN_TIMEOUT_MSEC", None)#จะได้53 คือเวลารอตอนเปิดภาพกับเวลารอตอนอ่านภาพ getattr เป็นคนไปหาเอง
+    read_timeout = getattr(cv, "CAP_PROP_READ_TIMEOUT_MSEC", None)#54 คนเขียนopencvเป็นคนกำหนด
     if open_timeout is None or read_timeout is None:
         return cv.VideoCapture(url)
-    return cv.VideoCapture(url, cv.CAP_FFMPEG, [open_timeout, OPEN_TIMEOUT_MS, read_timeout, READ_TIMEOUT_MS])
+    return cv.VideoCapture(url, cv.CAP_FFMPEG, [open_timeout, OPEN_TIMEOUT_MS, read_timeout, READ_TIMEOUT_MS]) 
 
 
 def _setup_logger(camera_id: str) -> logging.Logger:
-    os.makedirs("logs", exist_ok=True)
+    os.makedirs("logs", exist_ok=True) #makedirsเครื่องมือสร้างโฟลเดอร์
     logger = logging.getLogger(f"cam_stream_{camera_id}")
     logger.setLevel(logging.INFO)
     if not logger.handlers:
-        handler = logging.FileHandler(f"logs/camera_{camera_id}.log", encoding="utf-8")
+        handler = logging.FileHandler(f"logs/camera_{camera_id}.log", encoding="utf-8")#encoding="utf-8"คือการบอกให้รองรับทุก
         handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
         logger.addHandler(handler)
     return logger
