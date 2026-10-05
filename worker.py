@@ -20,8 +20,15 @@ from security.ip_guard import SSRFBlockedError
 RETRY_DELAYS = {1: 3, 2: 5, 3: 10}
 DEAD_LETTER_THRESHOLD = 3
 
-REALTIME_CONCURRENCY = 5
-RESUME_CONCURRENCY = 3
+# เพดานการยิง webhook พร้อมกัน แบ่งเป็น 2 ชั้น:
+# - *_PER_ENDPOINT_CONCURRENCY: ต่อ 1 endpoint — กันเซิร์ฟเวอร์ลูกค้ารายเดียวโดนถล่ม และกัน endpoint
+#   ที่มี event เยอะบังคิว endpoint อื่น
+# - *_CONCURRENCY: รวมทุก endpoint ของ job นั้น — กันฝั่งเราเอง (memory จากรูปที่อ่านขึ้นมา / connection)
+#   ตอนมี endpoint จำนวนมากยิงพร้อมกัน
+REALTIME_CONCURRENCY = 15
+REALTIME_PER_ENDPOINT_CONCURRENCY = 5
+RESUME_CONCURRENCY = 10
+RESUME_PER_ENDPOINT_CONCURRENCY = 3
 
 HEALTH_CHECK_TIMEOUT_SECONDS = 5
 
@@ -57,8 +64,8 @@ def _is_valid_ack(event: models.WebhookEvent, response: httpx.Response) -> bool:
 
 def _read_event_images(event: models.WebhookEvent) -> dict:
     """อ่านไฟล์รูป full/crop แบบ sync (blocking disk I/O) — เรียกผ่าน asyncio.to_thread เท่านั้น
-    ไม่ให้ blocking I/O นี้ไปแช่ event loop ตอนมีหลาย event ยิงพร้อมกัน (REALTIME_CONCURRENCY=5 /
-    RESUME_CONCURRENCY=3 ผ่าน asyncio.gather)"""
+    ไม่ให้ blocking I/O นี้ไปแช่ event loop ตอนมีหลาย event ยิงพร้อมกัน (สูงสุด REALTIME_CONCURRENCY /
+    RESUME_CONCURRENCY ตัว ผ่าน asyncio.gather)"""
     with open(event.full_image_path, "rb") as f_full, \
          open(event.crop_image_path, "rb") as f_crop:
         return {
@@ -113,10 +120,27 @@ async def _send_webhook_request(client: httpx.AsyncClient, event: models.Webhook
         return "error", str(e)
 
 
-async def _send_with_semaphore(semaphore: asyncio.Semaphore, client: httpx.AsyncClient, event: models.WebhookEvent):
-    async with semaphore:
-        result_type, error_msg = await _send_webhook_request(client, event)
+async def _send_with_semaphore(
+    global_semaphore: asyncio.Semaphore,
+    endpoint_semaphore: asyncio.Semaphore,
+    client: httpx.AsyncClient,
+    event: models.WebhookEvent,
+):
+    # ต้องขอคิวของ endpoint ตัวเองก่อน แล้วค่อยขอ slot รวม — ถ้าสลับกัน event จำนวนมากของ endpoint
+    # เดียวจะถือ slot รวมไว้เฉยๆ ระหว่างรอคิวตัวเอง ทำให้ endpoint อื่นไม่ได้ส่ง
+    async with endpoint_semaphore:
+        async with global_semaphore:
+            result_type, error_msg = await _send_webhook_request(client, event)
     return event, result_type, error_msg
+
+
+def _build_endpoint_semaphores(events, per_endpoint_limit: int) -> dict:
+    """สร้าง Semaphore แยกให้แต่ละ endpoint (key = webhook_endpoint_id) จาก event ที่กำลังจะส่งรอบนี้
+    event ที่ไม่มี endpoint ผูก (webhook_endpoint_id=None) จะใช้ Semaphore ร่วมกันภายใต้ key None"""
+    return {
+        endpoint_id: asyncio.Semaphore(per_endpoint_limit)
+        for endpoint_id in {e.webhook_endpoint_id for e in events}
+    }
 
 
 async def _get_suspended_user_ids(db: AsyncSession, user_ids: set) -> set:
@@ -225,7 +249,8 @@ async def process_webhook_queue():
     """
     Job A — realtime: event ใหม่ + event ที่กำลัง retry ปกติเท่านั้น (status pending/failed)
     ไม่แตะ dead_letter เลย นั่นเป็นหน้าที่ของ Job B (process_graveyard_resume) โดยเฉพาะ
-    ใช้ Semaphore(REALTIME_CONCURRENCY) แยกเด็ดขาดจาก Job B ไม่แย่ง concurrency กัน
+    ใช้ Semaphore ของตัวเอง (รวม REALTIME_CONCURRENCY + ต่อ endpoint REALTIME_PER_ENDPOINT_CONCURRENCY)
+    แยกเด็ดขาดจาก Job B ไม่แย่ง concurrency กัน
     """
     db: AsyncSession = SessionLocal()
     try:
@@ -278,10 +303,16 @@ async def process_webhook_queue():
         tripped_endpoints = {}  # endpoint.id -> endpoint, กันแจ้งซ้ำถ้าหลาย event ตัดไฟ endpoint เดียวกันพร้อมกัน
 
         if to_send:
-            semaphore = asyncio.Semaphore(REALTIME_CONCURRENCY)
+            global_semaphore = asyncio.Semaphore(REALTIME_CONCURRENCY)
+            endpoint_semaphores = _build_endpoint_semaphores(to_send, REALTIME_PER_ENDPOINT_CONCURRENCY)
             async with httpx.AsyncClient() as client:
                 results = await asyncio.gather(
-                    *(_send_with_semaphore(semaphore, client, event) for event in to_send)
+                    *(
+                        _send_with_semaphore(
+                            global_semaphore, endpoint_semaphores[event.webhook_endpoint_id], client, event
+                        )
+                        for event in to_send
+                    )
                 )
 
             for event, result_type, error_msg in results:
@@ -345,7 +376,8 @@ def _event_files_exist(event: models.WebhookEvent) -> bool:
 
 async def process_graveyard_resume(endpoint_ids: list[int] | None = None):
     """
-    Job B — แยกเด็ดขาดจาก Job A ทั้งคิวและ Semaphore (RESUME_CONCURRENCY)
+    Job B — แยกเด็ดขาดจาก Job A ทั้งคิวและ Semaphore
+    (รวม RESUME_CONCURRENCY + ต่อ endpoint RESUME_PER_ENDPOINT_CONCURRENCY)
     ทุก 30 นาที (default): ส่ง event ที่ค้างอยู่ใน dead_letter ซ้ำ ให้ endpoint ที่ปลายทางกลับมาแล้ว
 
     endpoint ที่ถูกเช็ค (ต้อง is_active=True เสมอ):
@@ -461,9 +493,15 @@ async def _process_graveyard_resume(endpoint_ids: list[int] | None = None):
             if not dead_events:
                 return
 
-            semaphore = asyncio.Semaphore(RESUME_CONCURRENCY)
+            global_semaphore = asyncio.Semaphore(RESUME_CONCURRENCY)
+            endpoint_semaphores = _build_endpoint_semaphores(dead_events, RESUME_PER_ENDPOINT_CONCURRENCY)
             results = await asyncio.gather(
-                *(_send_with_semaphore(semaphore, client, event) for event in dead_events)
+                *(
+                    _send_with_semaphore(
+                        global_semaphore, endpoint_semaphores[event.webhook_endpoint_id], client, event
+                    )
+                    for event in dead_events
+                )
             )
 
         endpoints_by_id = {ep.id: ep for ep in reachable_endpoints}

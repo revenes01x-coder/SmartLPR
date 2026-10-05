@@ -185,7 +185,7 @@ def build_pinned_request(url: str) -> tuple[str, dict]:
     if parsed.port:
         netloc = f"{netloc}:{parsed.port}"
 
-    pinned_url = urlunparse(parsed._replace(netloc=netloc))
+    pinned_url = urlunparse(parsed._replace(netloc=netloc)) #ทำการแทนที่ netloc เดิม (ที่เป็นชื่อโดเมน) ด้วย netloc ใหม่ (ที่เป็น IP)
 
     extra_kwargs = {
         # Host header ต้องเป็น hostname เดิม ไม่งั้นปลายทางที่ทำ virtual host จะ route ผิดเว็บ
