@@ -3,7 +3,7 @@ from fastapi import FastAPI, Depends, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
-from sqlalchemy import select, update, func
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timezone
@@ -35,33 +35,6 @@ async def _init_models() -> None:
         ))
 
 
-async def _seed_contact_channels() -> None:
-    """เพิ่มช่องทางติดต่อเริ่มต้น 3 รายการ (LINE / อีเมล / เวลาทำการ) เฉพาะตอนตาราง
-    contact_channels ยังว่างอยู่ (deploy ครั้งแรก) รันครั้งเดียวตอน startup หลัง _init_models()
-    สร้างตารางเสร็จ — ถ้ามีข้อมูลอยู่แล้วไม่ว่าเพราะเคย seed ไปแล้วหรือ admin ลบเองจนเหลือ 0 แถว
-    พอดี จะไม่ seed ซ้ำ กันข้อมูลที่ admin ตั้งใจลบทิ้งกลับมาใหม่ทุกครั้งที่รีสตาร์ทเซิร์ฟเวอร์"""
-    async with SessionLocal() as db:
-        count = (await db.execute(select(func.count(models.ContactChannel.id)))).scalar_one()
-        if count:
-            return
-
-        db.add_all([
-            models.ContactChannel(
-                label="LINE Official Account", value="sp0803650401",
-                icon="line", display_order=1,
-            ),
-            models.ContactChannel(
-                label="อีเมล", value="saphonxch@gmail.com",
-                icon="email", display_order=2,
-            ),
-            models.ContactChannel(
-                label="เวลาทำการ", value="จันทร์–ศุกร์ 09:00–18:00 น.",
-                icon="clock", display_order=3,
-            ),
-        ])
-        await db.commit()
-
-
 async def _cleanup_orphaned_camera_storage() -> None:
     """ลบโฟลเดอร์รูปภาพ captures/ และ logs/ ของกล้องที่ไม่มีอยู่ในฐานข้อมูลแล้ว (Orphaned Assets) ตอน startup"""
     async with SessionLocal() as db:
@@ -83,13 +56,14 @@ async def _cleanup_orphaned_events() -> None:
         await db.commit()
 
 
-# Lifespan: สร้างตาราง (ถ้ายังไม่มี) + seed ช่องทางติดต่อเริ่มต้น (ถ้าตารางว่าง) + สั่งให้ Worker
+# Lifespan: สร้างตาราง (ถ้ายังไม่มี) + สั่งให้ Worker
 # ทำงานตอนเปิดเซิร์ฟเวอร์ และปิด Worker ตอนปิดเซิร์ฟเวอร์
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print(" เริ่มระบบ SmartLPR Webhook API และ Background Worker...")
     await _init_models()
-    await _seed_contact_channels()
+    # [Contact]: ไม่ seed ช่องทางติดต่อเริ่มต้นแล้ว — ตาราง contact_channels เริ่มจากว่างเปล่า
+    # ให้ admin เข้าไปเพิ่มเองที่หน้า "ติดต่อเรา" (POST /admin/contact-channels) หลังเปิดระบบครั้งแรก
     await _cleanup_orphaned_camera_storage()
     await _cleanup_orphaned_events()
     scheduler = start_scheduler()

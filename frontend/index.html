@@ -1885,7 +1885,7 @@
          (normalize_user_contact_value ใน smartlpr/schemas.py) ทุกประการ — ฝั่งนี้แค่ช่วย UX เท่านั้น -->
     <div class="field" id="contact-modal-value-field" style="margin-bottom:0;">
       <label id="contact-modal-value-label">ข้อความที่แสดง</label>
-      <input type="text" id="contact-modal-value" autocomplete="off" placeholder="เช่น sp0803650401" oninput="onContactChannelValueInput()">
+      <input type="text" id="contact-modal-value" autocomplete="off" placeholder="เช่น @yourlineid" oninput="onContactChannelValueInput()">
       <div class="hint hidden" id="contact-modal-phone-hint">รูปแบบ: เบอร์มือถือไทย 10 หลัก ขึ้นต้นด้วย 06, 08 หรือ 09 เท่านั้น</div>
       <div class="field-error" id="contact-modal-minlen-error">ต้องมีความยาวอย่างน้อย 4 ตัวอักษร</div>
     </div>
@@ -6999,7 +6999,14 @@ async function loadContactChannels() {
   try {
     const items = await apiCall('/contact');
     CONTACT_CHANNELS = items || [];
-    if (!CONTACT_CHANNELS.length) { list.innerHTML = ''; empty.classList.remove('hidden'); return; }
+    if (!CONTACT_CHANNELS.length) {
+      // ระบบไม่มีช่องทางติดต่อเริ่มต้นให้แล้ว (backend ไม่ seed) — admin ต้องเพิ่มเองครั้งแรก
+      // เลยบอก admin ตรงๆ ว่าต้องกดปุ่มไหน ส่วน user ทั่วไปเห็นแค่ว่ายังไม่มีข้อมูล
+      empty.textContent = IS_ADMIN
+        ? 'ยังไม่มีช่องทางติดต่อ — กดปุ่มเพิ่มช่องทางด้านบนเพื่อกรอกข้อมูลติดต่อของคุณ'
+        : 'ยังไม่มีช่องทางติดต่อ';
+      list.innerHTML = ''; empty.classList.remove('hidden'); return;
+    }
     list.innerHTML = CONTACT_CHANNELS.map((c, idx) => contactRowMarkup(c, idx, CONTACT_CHANNELS.length)).join('');
   } catch (e) {
     list.innerHTML = `<div class="empty-inline">โหลดไม่สำเร็จ: ${escapeHtml(e.message || '')}</div>`;
@@ -7098,7 +7105,7 @@ function onContactChannelTypeChange() {
     label.textContent = 'ข้อความที่แสดง';
     valueInput.removeAttribute('inputmode');
     valueInput.removeAttribute('maxlength');
-    valueInput.placeholder = type === 'email' ? 'you@example.com' : 'เช่น sp0803650401';
+    valueInput.placeholder = type === 'email' ? 'you@example.com' : 'เช่น @yourlineid';
     phoneHint.classList.add('hidden');
   }
 
