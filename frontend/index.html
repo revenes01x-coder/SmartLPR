@@ -3066,7 +3066,8 @@ function networkErrorDiagnostics() {
    ============================================================ */
 async function apiCall(path, { method = "GET", json = null, form = null, auth = true, _retried = false } = {}) {
   // credentials: 'include' จำเป็นเสมอ (ไม่ใช่แค่ตอน login/refresh/logout) เพื่อให้ browser แนบ/รับ
-  // httpOnly refresh-token cookie ได้ถูกต้อง — cookie ถูกจำกัด path=/auth ไว้ฝั่ง backend อยู่แล้ว
+  // httpOnly refresh-token cookie ได้ถูกต้อง — cookie ถูกจำกัด path ไว้ฝั่ง backend ที่ /api/auth
+  // (REFRESH_COOKIE_PATH ใน smartlpr/config.py — ต้องมี /api เพราะเป็น path ที่เบราว์เซอร์เห็น)
   // เลยไม่หลุดไปแนบกับ endpoint อื่นที่ไม่เกี่ยวข้องโดยไม่จำเป็น ใส่ไว้ทุก request จึงปลอดภัย
   // ngrok-skip-browser-warning: จำเป็นเฉพาะตอน API_BASE เป็น ngrok free tier เท่านั้น — ไม่งั้น
   // ngrok จะคั่นด้วยหน้า "You are about to visit..." (HTML ธรรมดา ไม่มี CORS header ให้)

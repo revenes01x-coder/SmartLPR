@@ -24,6 +24,16 @@ REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 # Cookie ต้อง Secure=True เมื่อรันจริงผ่าน https:// เท่านั้น (ไม่งั้น browser จะไม่ยอมตั้ง cookie ให้)
 # ตอน dev บน http://localhost ตั้งใน .env เป็น COOKIE_SECURE=false ได้
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
+# Path ของ refresh-token cookie = path ที่ "เบราว์เซอร์" เห็น (ไม่ใช่ path ที่ FastAPI เห็น)
+# nginx ตัด /api ออกก่อนส่งมาหา backend ดังนั้นเบราว์เซอร์เรียก /api/auth/refresh แต่ FastAPI เห็น
+# /auth/refresh — เบราว์เซอร์จะแนบ cookie เฉพาะ URL ที่ขึ้นต้นด้วยค่านี้ จึงต้องมี /api นำหน้า
+# ค่าเริ่มต้น = ROOT_PATH + "/auth" (ปกติคือ /api/auth) -> cookie ไปเฉพาะ endpoint กลุ่ม /auth
+#   - เข้าเว็บผ่าน sub-path เช่น /smartlpr/  -> ตั้ง REFRESH_COOKIE_PATH=/smartlpr/api/auth
+#   - dev ยิง backend ตรง (ไม่ผ่าน nginx)     -> ตั้ง REFRESH_COOKIE_PATH=/auth
+REFRESH_COOKIE_PATH = os.getenv(
+    "REFRESH_COOKIE_PATH",
+    os.getenv("ROOT_PATH", "/api").rstrip("/") + "/auth",
+)
 
 # ---- SSRF Guard ----
 # อนุญาตให้เชื่อมต่อ Private IP/Localhost ได้หรือไม่ (สำหรับตอน Test)

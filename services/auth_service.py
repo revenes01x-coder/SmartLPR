@@ -42,6 +42,7 @@ from smartlpr.config import (
     OTP_RESEND_LIMIT_PER_HOUR,
     REFRESH_TOKEN_EXPIRE_DAYS,
     COOKIE_SECURE,
+    REFRESH_COOKIE_PATH,
     SECRET_KEY,
     ALGORITHM,
 )
@@ -138,11 +139,26 @@ def _set_refresh_cookie(response: Response, plain_token: str, remember_me: bool 
         httponly=True,
         secure=COOKIE_SECURE,
         samesite="lax",
-        path="/",
+        # จำกัดให้เบราว์เซอร์แนบ cookie นี้เฉพาะ endpoint กลุ่ม /auth (login/refresh/logout)
+        # เดิมเป็น path="/" ทำให้ refresh token ถูกแนบไปกับทุก request ของทั้งโดเมน
+        path=REFRESH_COOKIE_PATH,
     )
+    _clear_legacy_refresh_cookie(response)
+
+
+def _clear_legacy_refresh_cookie(response: Response) -> None:
+    """ลบ cookie ใบเก่าที่เคยตั้งด้วย path="/" (ก่อนแก้) ออกจากเบราว์เซอร์ของผู้ใช้เดิม
+    ถ้าไม่ลบ เบราว์เซอร์จะส่ง refresh_token มา 2 ใบชื่อเดียวกัน (ใบเก่า path=/ + ใบใหม่) แล้ว
+    backend อาจหยิบใบเก่าที่ถูก rotate ทิ้งไปแล้วมาใช้ -> ถูกมองว่า token หลุด -> เตะ logout ทั้งสาย
+    เอาฟังก์ชันนี้ออกได้หลัง deploy ไปแล้วเกิน REFRESH_TOKEN_EXPIRE_DAYS (ใบเก่าหมดอายุเองหมดแล้ว)"""
+    if REFRESH_COOKIE_PATH != "/":
+        response.delete_cookie(key=REFRESH_TOKEN_COOKIE_NAME, path="/")
+
 
 def _clear_refresh_cookie(response: Response) -> None:
-    response.delete_cookie(key=REFRESH_TOKEN_COOKIE_NAME, path="/")
+    # path ตอนลบต้องตรงกับตอนตั้งเป๊ะ ไม่งั้นเบราว์เซอร์จะไม่ลบให้
+    response.delete_cookie(key=REFRESH_TOKEN_COOKIE_NAME, path=REFRESH_COOKIE_PATH)
+    _clear_legacy_refresh_cookie(response)
 
 
 async def _revoke_token_family(db: AsyncSession, family_id: str) -> None:
