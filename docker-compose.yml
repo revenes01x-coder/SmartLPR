@@ -91,6 +91,11 @@ services:
 networks:
   web_net:
     driver: bridge
+    # ล็อกช่วง IP ให้คงที่ — nginx.conf (set_real_ip_from) เชื่อ X-Forwarded-For จาก gateway ตัวนี้เท่านั้น
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
   db_net:
     driver: bridge
 
