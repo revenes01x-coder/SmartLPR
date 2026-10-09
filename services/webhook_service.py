@@ -20,7 +20,6 @@ async def add_webhook(
     current_user: models.User,
 ):
 
-    # [แก้ไข] check_rate_limit เป็น async def แล้ว เดิมเรียกไม่มี await ทำให้ rate limit จุดนี้ไม่ทำงานจริง
     await check_rate_limit(db, f"add_webhook_{current_user.id}", "add_webhook", limit=20, window_minutes=60)
 
     url_str = str(webhook.url)

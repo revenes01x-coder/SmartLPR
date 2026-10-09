@@ -10,7 +10,7 @@ def _hmac_hash(value: str) -> str:
 def generate_otp() -> str:
     """สุ่มเลข OTP แบบ cryptographically secure ความยาวตาม config (ปกติ 6 หลัก)"""
     upper_bound = 10 ** OTP_LENGTH
-    number = secrets.randbelow(upper_bound)
+    number = secrets.randbelow(upper_bound)                                        #secrets.randbelow secrets: เป็นโมดูลสุ่มของ Pythonrandbelow(1,000,000): คือการสุ่มตัวเลขจำนวนเต็มตั้งแต่ 0 ถึง 999,999 ออกมา 1 ตัวเลข 
     return str(number).zfill(OTP_LENGTH)
 
 def hash_otp(otp: str) -> str:

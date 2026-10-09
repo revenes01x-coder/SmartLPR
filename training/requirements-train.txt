@@ -1,0 +1,23 @@
+# ใช้ตอน train / สร้าง dataset บนเครื่องตัวเองเท่านั้น (server / docker ไม่ต้องติดตั้ง)
+# ติดตั้ง: pip install -r training/requirements-train.txt
+# ถ้ามีการ์ดจอ NVIDIA ให้ติดตั้ง torch แบบ CUDA ตามเว็บ pytorch.org ก่อน แล้วค่อยรันคำสั่งข้างบน
+
+ultralytics      # YOLO: train หาป้าย, crop ป้าย, crop รถ
+torch
+torchvision
+opencv-python
+pillow
+pandas
+pyyaml
+
+# OCR (deep-text-recognition-benchmark)
+lmdb
+natsort
+nltk
+six
+
+# โมเดลแยกสีรถ
+tensorflow
+matplotlib
+scikit-learn
+numpy
