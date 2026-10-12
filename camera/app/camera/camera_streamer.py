@@ -9,7 +9,7 @@ import cv2 as cv
 
 from security.camera_url_guard import resolve_rtsp_url_pinned
 from security.ip_guard import SSRFBlockedError
-from smartlpr.config import CAMERA_DETECTION_FPS
+from camera.config import CAMERA_DETECTION_FPS
 
 RECONNECT_SEC = 10
 DETECTION_FPS = float(CAMERA_DETECTION_FPS or 5.0)

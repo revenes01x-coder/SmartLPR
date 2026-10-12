@@ -19,7 +19,7 @@ import requests
 from ultralytics import YOLO
 from camera.plate_ocr import predict as ocr_predict
 
-from smartlpr.config import (
+from camera.config import (
     PLATE_YOLO_MODEL_PATH,
     CAR_DETECTOR_MODEL_PATH,
     CAR_COLOR_MODEL_PATH,
@@ -256,7 +256,7 @@ def send_to_webhook(camera_id, path_full, path_crop, plate, province, color, ts_
         }
 
         # [Internal Auth]: แนบ secret กลางไปด้วยทุกครั้ง — backend (/capture-event)
-        # จะปฏิเสธ request ที่ไม่มี header นี้หรือค่าไม่ตรง (ดู smartlpr/security.py:
+        # จะปฏิเสธ request ที่ไม่มี header นี้หรือค่าไม่ตรง (ดู backend/app/smartlpr/security.py:
         # require_capture_event_secret) กันคนนอกที่รู้ camera_id ยิงข้อมูล/path ปลอมเข้ามา
         response = requests.post(
             WEBHOOK_URL,

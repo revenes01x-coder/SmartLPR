@@ -1,0 +1,17 @@
+# ไฟล์ที่ไม่ต้องส่งเข้าไปตอน build image ของ backend
+.env
+.env.*
+!.env.example
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+.venv/
+venv/
+# รูป/ log ใช้ volume ตอนรัน ไม่ต้องอบเข้า image
+app/captures/
+app/logs/
+*.db
+*.sqlite3
+docker-compose.yml
+Dockerfile
+.dockerignore

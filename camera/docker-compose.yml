@@ -1,0 +1,49 @@
+# ============================================================
+# โปรเจค 2: Camera (AI อ่านป้ายทะเบียน)
+#
+# รันเดี่ยวในเครื่อง:   cd camera  &&  docker compose up -d --build
+# บน VM ไม่ต้องรันไฟล์นี้เอง — docker-compose.yml ชั้นนอกสุด include ไฟล์นี้ให้แล้ว
+# ก่อนรันครั้งแรกต้องมี: network กลาง (scripts/setup-networks.sh) และไฟล์ camera/.env
+# ไม่มี depends_on db เพราะ db อยู่คนละโปรเจค — ถ้าเปิดก่อน DB พร้อม camera จะ log error แล้วลองใหม่ทุก 5 วิเอง
+# ============================================================
+name: smartlpr-camera
+
+services:
+  camera:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: smartlpr-camera
+    restart: unless-stopped
+    # ให้เวลาปิดอย่างเรียบร้อย: ปิด streamer (สูงสุด 30+10 วิ) แล้วค่อยปิด AI worker (สูงสุด 30+10 วิ)
+    # ค่าเริ่มต้นของ Docker คือ 10 วิ ไม่พอ -> โดน SIGKILL กลางคัน
+    stop_grace_period: 90s
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app
+      - DATABASE_URL=postgresql+asyncpg://${DB_USER:-smartlpr_user}:${DB_PASSWORD:-smartlpr_password}@db:5432/${DB_NAME:-smartlpr_db}
+      - TZ=Asia/Bangkok
+    volumes:
+      - ./app:/app
+      - model_data:/app/models
+      # โฟลเดอร์รูป/ log ใช้ร่วมกับ backend (path ใน container ต้องตรงกัน: /app/captures)
+      - ../captures:/app/captures
+      - ../logs:/app/logs
+    networks:
+      - web_net    # ส่ง event ไปที่ http://backend:8000/capture-event
+      - db_net     # อ่านรายชื่อกล้องจาก DB (camera/app/camera/db.py)
+
+networks:
+  web_net:
+    name: smartlpr_web
+    external: true
+  db_net:
+    name: smartlpr_db
+    external: true
+
+volumes:
+  model_data:
+    # ตั้งชื่อตายตัวให้ตรงกับ volume เดิมบน VM (ใช้โมเดลชุดเดิมต่อได้เลย)
+    # ถ้าเปลี่ยนไฟล์ใน app/models แล้วอยากให้ container ใช้ชุดใหม่: docker volume rm smartlpr_model_data แล้ว build ใหม่
+    name: smartlpr_model_data

@@ -29,11 +29,13 @@ DATA_ROOT = Path(os.environ.get("SMARTLPR_DATA_ROOT", DEFAULT_DATA_ROOT))
 OUTPUT_DIR = TRAINING_DIR / "outputs"
 
 # ---------- โมเดล / ไฟล์ที่ระบบหลักใช้งานจริง ----------
-PROD_MODELS_DIR  = PROJECT_DIR / "models"
+# หลังแยกเป็น 3 โปรเจค โมเดลกับชุดตัวอักษรย้ายไปอยู่ในโปรเจค camera (camera/app/)
+CAMERA_APP_DIR   = PROJECT_DIR / "camera" / "app"
+PROD_MODELS_DIR  = CAMERA_APP_DIR / "models"
 PLATE_YOLO_MODEL = PROD_MODELS_DIR / "yolo" / "best.pt"           # YOLO หาป้ายทะเบียน
 CAR_YOLO_MODEL   = PROD_MODELS_DIR / "detector" / "yolo11n.pt"    # YOLO หารถ (COCO pretrained)
 COLOR_MODEL_PROD = PROD_MODELS_DIR / "color" / "car_color_model.h5"
-CHAR_FILE        = PROJECT_DIR / "thai_plate_chars.txt"            # ชุดตัวอักษรของ OCR (ต้องตรงกับตอนใช้งานจริง)
+CHAR_FILE        = CAMERA_APP_DIR / "thai_plate_chars.txt"            # ชุดตัวอักษรของ OCR (ต้องตรงกับตอนใช้งานจริง)
 
 # =====================================================================
 # 1) YOLO ตรวจจับป้ายทะเบียน (dataset export มาจาก Roboflow)

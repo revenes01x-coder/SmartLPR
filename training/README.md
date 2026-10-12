@@ -5,9 +5,9 @@
 
 | โมเดล | หน้าที่ในระบบ | ไฟล์ที่ระบบใช้จริง |
 |---|---|---|
-| YOLO ป้ายทะเบียน | หาว่าป้ายอยู่ตรงไหนในรูป | `models/yolo/best.pt` |
-| OCR | อ่านตัวอักษรบนป้าย (เลขทะเบียน + จังหวัด) | `models/ocr/thai_platev1.pth` + `thai_plate_chars.txt` |
-| สีรถ | บอกว่ารถสีอะไร | `models/color/car_color_model.h5` + `class_names.json` |
+| YOLO ป้ายทะเบียน | หาว่าป้ายอยู่ตรงไหนในรูป | `camera/app/models/yolo/best.pt` |
+| OCR | อ่านตัวอักษรบนป้าย (เลขทะเบียน + จังหวัด) | `camera/app/models/ocr/thai_platev1.pth` + `thai_plate_chars.txt` |
+| สีรถ | บอกว่ารถสีอะไร | `camera/app/models/color/car_color_model.h5` + `class_names.json` |
 
 ## โครงสร้าง
 
@@ -82,7 +82,7 @@ python training\yolo_plate\train_yolo.py --resume training\outputs\yolo\<ชื�
 `create_char_list.py` เป็นตัวช่วยสร้างรายการตัวอักษรแบบพื้นฐาน (ไม่มีสระ) เขียนไว้ที่ `outputs\` เท่านั้น
 **ห้ามเอาไปทับ `thai_plate_chars.txt` ของระบบ** เพราะโมเดลที่ใช้อยู่ train ด้วยชุดที่มีสระ/วรรณยุกต์ ถ้าชุดตัวอักษรไม่ตรง โมเดลจะอ่านเพี้ยนทั้งหมด
 
-ทดสอบโมเดลที่ระบบใช้อยู่ตอนนี้: `python training\ocr\run_test.py models\ocr\thai_platev1.pth`
+ทดสอบโมเดลที่ระบบใช้อยู่ตอนนี้: `python training\ocr\run_test.py camera\app\models\ocr\thai_platev1.pth`
 
 ## 3) โมเดลแยกสีรถ
 

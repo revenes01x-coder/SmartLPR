@@ -1,0 +1,70 @@
+# ============================================================
+# โปรเจค 1: Backend (FastAPI + webhook worker) + PostgreSQL
+#
+# รันเดี่ยวในเครื่อง:   cd backend  &&  docker compose up -d --build
+# บน VM ไม่ต้องรันไฟล์นี้เอง — docker-compose.yml ชั้นนอกสุด include ไฟล์นี้ให้แล้ว
+# ก่อนรันครั้งแรกต้องมี: network กลาง (scripts/setup-networks.sh) และไฟล์ backend/.env
+# ============================================================
+name: smartlpr-backend
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: smartlpr-db
+    restart: always
+    environment:
+      - POSTGRES_USER=${DB_USER:-smartlpr_user}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-smartlpr_password}
+      - POSTGRES_DB=${DB_NAME:-smartlpr_db}
+      - TZ=Asia/Bangkok
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-smartlpr_user} -d ${DB_NAME:-smartlpr_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - db_net     # DB ต่อแค่สะพานหลังบ้าน — frontend มองไม่เห็น
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: smartlpr-backend
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${DB_USER:-smartlpr_user}:${DB_PASSWORD:-smartlpr_password}@db:5432/${DB_NAME:-smartlpr_db}
+      - TZ=Asia/Bangkok
+      - ROOT_PATH=/api
+    # [DEV MODE] เปิด Hot-Reload ให้ FastAPI สังเกตการแก้ไฟล์
+    command: ["uvicorn", "smartlpr.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    volumes:
+      # [DEV MODE] แชร์โค้ดเข้าไป เวลากดเซฟ โค้ดใน Docker อัปเดตทันที
+      - ./app:/app
+      # โฟลเดอร์รูป/ log อยู่ชั้นนอกสุดของ repo ใช้ร่วมกับ camera (ต้อง mount ที่ /app/captures เหมือนกัน
+      # เพราะ camera ส่ง path รูปมา แล้ว backend เปิดไฟล์จาก path นั้นตรงๆ)
+      - ../captures:/app/captures
+      - ../logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - web_net    # รับคำสั่งจาก nginx (frontend) และรับ event จาก camera
+      - db_net     # คุยกับ Database
+
+# network กลางที่ทั้ง 3 โปรเจคใช้ร่วมกัน — สร้างครั้งเดียวด้วย scripts/setup-networks.sh
+networks:
+  web_net:
+    name: smartlpr_web
+    external: true
+  db_net:
+    name: smartlpr_db
+    external: true
+
+volumes:
+  db_data:
+    # ตั้งชื่อตายตัวให้ตรงกับ volume เดิมบน VM (ข้อมูล DB เดิมยังอยู่ครบ)
+    name: smartlpr_db_data

@@ -1,0 +1,31 @@
+# ============================================================
+# โปรเจค 3: Frontend (nginx แจกหน้าเว็บ + ส่งต่อ /api/ ไปหา backend)
+#
+# รันเดี่ยวในเครื่อง:   cd frontend  &&  docker compose up -d
+# บน VM ไม่ต้องรันไฟล์นี้เอง — docker-compose.yml ชั้นนอกสุด include ไฟล์นี้ให้แล้ว
+# ไม่ต้องมี .env (frontend ไม่มีความลับอะไร)
+# ไม่มี depends_on backend เพราะอยู่คนละโปรเจค — nginx.conf ใช้ "server backend:8000 resolve"
+# จึงเปิดก่อน backend ได้ (ระหว่างนั้น /api/ ตอบ 502) และหา backend เจอเองเมื่อ backend เปิด/ถูกสร้างใหม่
+# ============================================================
+name: smartlpr-frontend
+
+services:
+  frontend:
+    # ต้องเป็น nginx 1.27.3 ขึ้นไป (รองรับ "server ... resolve" ใน upstream) — ล็อกเวอร์ชันไว้
+    image: nginx:1.28-alpine
+    container_name: smartlpr-frontend
+    restart: always
+    ports:
+      - "8081:80"   # nginx ของเพื่อนบน VM ส่งต่อ /smartlpr/ มาที่ port นี้ — ห้ามเปลี่ยน
+    volumes:
+      # แจกเฉพาะโฟลเดอร์ public/ (เดิม mount ทั้งโฟลเดอร์ ทำให้คนนอกโหลด /nginx.conf ได้)
+      - ./public:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # [PDPA/Security]: ไม่ mount captures เข้า nginx — nginx ไม่ต้องเข้าถึงรูปป้ายทะเบียนเลย
+    networks:
+      - web_net    # nginx ต่อแค่สะพานหน้าบ้าน (มองไม่เห็น Database)
+
+networks:
+  web_net:
+    name: smartlpr_web
+    external: true

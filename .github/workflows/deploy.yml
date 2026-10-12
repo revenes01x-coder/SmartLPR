@@ -17,7 +17,15 @@ jobs:
           git fetch origin main
           git reset --hard origin/main
 
-      # ขั้นตอนที่ 2: รีสตาร์ทและ build container ใหม่
+      # ขั้นตอนที่ 2: เตรียม network กลางที่ 3 โปรเจคใช้คุยกัน (มีอยู่แล้วจะข้าม)
+      - name: Ensure shared networks
+        run: |
+          cd /home/trainee/smartlpr
+          sh scripts/setup-networks.sh
+
+      # ขั้นตอนที่ 3: build และเปิดทั้ง 4 service ผ่านไฟล์รวม (docker-compose.yml ชั้นนอกสุด include 3 โปรเจค)
+      # restart frontend เพื่อให้ nginx อ่าน nginx.conf ใหม่ (ไฟล์ถูก mount แบบไฟล์เดี่ยว
+      # ตอน git ดึงไฟล์ใหม่มาทับ container จะยังเห็นไฟล์เก่าจนกว่าจะ restart)
       - name: Restart containers
         run: |
           cd /home/trainee/smartlpr

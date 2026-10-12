@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 import cv2
 
-from smartlpr.config import (
+from camera.config import (
     PLATE_DETECTION_REPO_PATH,
     PLATE_OCR_MODEL_PATH,
     PLATE_OCR_CHAR_FILE,

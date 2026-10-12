@@ -1,105 +1,18 @@
+# ============================================================
+# ไฟล์รวม (ใช้บน VM): รวม 3 โปรเจคเป็นคำสั่งเดียว ได้ 4 service คือ db, backend, camera, frontend
+#
+#   sh scripts/setup-networks.sh    # ครั้งแรกครั้งเดียว (deploy.yml เรียกให้ทุกครั้ง รันซ้ำได้)
+#   docker compose up -d --build
+#
+# ค่าตั้งจริงของแต่ละ service อยู่ในโฟลเดอร์ของมันเอง — ไฟล์นี้แค่ include เข้ามา
+# แก้ที่ backend/ camera/ frontend/ ที่เดียว ทั้งในเครื่องและบน VM ได้ค่าเดียวกัน
+#
+# ข้อควรระวัง: ในเครื่องเดียวกัน ให้เลือกใช้ "ไฟล์นี้" หรือ "3 ไฟล์แยก" อย่างใดอย่างหนึ่ง
+# (ชื่อ container ซ้ำกัน) — ถ้าจะสลับ ให้ docker compose down ชุดเดิมก่อน
+# ============================================================
+name: smartlpr
 
-services:
-  db:
-    image: postgres:15-alpine
-    container_name: smartlpr-db
-    restart: always
-    environment:
-      - POSTGRES_USER=${DB_USER:-smartlpr_user}
-      - POSTGRES_PASSWORD=${DB_PASSWORD:-smartlpr_password}
-      - POSTGRES_DB=${DB_NAME:-smartlpr_db}
-      - TZ=Asia/Bangkok
-    volumes:
-      - db_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-smartlpr_user} -d ${DB_NAME:-smartlpr_db}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    networks:
-      - db_net     # Database ต่อแค่สะพานหลังบ้าน (ปลอดภัยสุดๆ)
-
-  backend:
-    build: 
-      context: .
-      dockerfile: Dockerfile
-    container_name: smartlpr-backend
-    restart: always
-    env_file:
-      - .env
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://${DB_USER:-smartlpr_user}:${DB_PASSWORD:-smartlpr_password}@db:5432/${DB_NAME:-smartlpr_db}
-      - TZ=Asia/Bangkok
-      - ROOT_PATH=/api
-    # [DEV MODE] เปิด Hot-Reload ให้ FastAPI สังเกตการแก้ไฟล์
-    command: ["uvicorn", "smartlpr.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
-    volumes:
-      # [DEV MODE] แชร์โค้ดทั้งโฟลเดอร์เข้าไป เพื่อให้เวลาเรากดเซฟ โค้ดใน Docker อัปเดตทันที
-      - ./:/app
-      - ./captures:/app/captures
-      - ./logs:/app/logs
-    depends_on:
-      db:
-        condition: service_healthy
-    networks:
-      - web_net    # ต่อสะพานหน้าบ้านเพื่อรับคำสั่งจาก Nginx
-      - db_net     # ต่อสะพานหลังบ้านเพื่อคุยกับ Database
-
-  frontend:
-    image: nginx:alpine
-    container_name: smartlpr-frontend
-    restart: always
-    ports:
-      - "8081:80"
-    volumes:
-      - ./frontend:/usr/share/nginx/html
-      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf
-      # [PDPA/Security]: ไม่ mount ./captures เข้า nginx แล้ว — nginx ไม่ต้องเข้าถึงรูปป้ายทะเบียนเลย
-    depends_on:
-      - backend
-    networks:
-      - web_net    # Nginx ต่อแค่สะพานหน้าบ้าน (มองไม่เห็น Database)
-
-  camera:
-    build:
-      context: .
-      dockerfile: Dockerfile.camera
-    container_name: smartlpr-camera
-    restart: unless-stopped
-    # ให้เวลาปิดอย่างเรียบร้อย: ปิด streamer (สูงสุด 30+10 วิ) แล้วค่อยปิด AI worker (สูงสุด 30+10 วิ)
-    # ค่าเริ่มต้นของ Docker คือ 10 วิ ไม่พอ -> โดน SIGKILL กลางคัน
-    stop_grace_period: 90s
-    env_file:
-      - .env
-    environment:
-      - PYTHONPATH=/app
-      - DATABASE_URL=postgresql+asyncpg://${DB_USER:-smartlpr_user}:${DB_PASSWORD:-smartlpr_password}@db:5432/${DB_NAME:-smartlpr_db}
-      - TZ=Asia/Bangkok
-    volumes:
-      - ./:/app
-      - model_data:/app/models        
-      - ./captures:/app/captures
-      - ./logs:/app/logs
-    depends_on:
-      db:
-        condition: service_healthy
-    networks:
-      - web_net
-      - db_net
-
-# ประกาศสร้างเครือข่ายจำลอง
-networks:
-  web_net:
-    driver: bridge
-    # ล็อกช่วง IP ให้คงที่ — nginx.conf (set_real_ip_from) เชื่อ X-Forwarded-For จาก gateway ตัวนี้เท่านั้น
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
-          gateway: 172.20.0.1
-  db_net:
-    driver: bridge
-
-# ประกาศ named volume สำหรับเก็บข้อมูลฐานข้อมูล (persistent)
-volumes:
-  db_data:
-  model_data: 
+include:
+  - backend/docker-compose.yml
+  - camera/docker-compose.yml
+  - frontend/docker-compose.yml

@@ -10,13 +10,12 @@ import time
 import logging
 import multiprocessing as mp
 
-from smartlpr import models
 # [Memory]: import เฉพาะ streamer (เบา มีแค่ OpenCV) — ห้าม import camera.camera_worker ที่ระดับ module
 # เพราะไฟล์นั้นโหลด TensorFlow + โมเดล OCR (~233MB) ทันทีตอน import ทำให้โปรเซส manager ถือโมเดล
 # ไว้เปล่าๆ และทุกโปรเซสลูกที่ fork ออกไป (streamer ทุกตัว) ได้ของพวกนี้ติดไปด้วย
 # ตัว AI worker จะ import camera_worker เองภายในโปรเซสลูก (ดู _run_inference_worker)
 import camera.camera_streamer as camera_streamer
-from smartlpr.database_sync import SessionLocal
+from camera.db import fetch_active_cameras
 
 POLL_INTERVAL_SECONDS = 5
 TERMINATE_TIMEOUT_SECONDS = 10
@@ -35,29 +34,9 @@ logger = logging.getLogger("camera_manager")
 
 
 def get_active_cameras() -> dict[str, dict]:
-    """คืน {camera_id: {"rtsp_url": ..., "delay": ...}} เฉพาะกล้องที่ is_active=True และเจ้าของยังไม่ถูกระงับ"""
-    db = SessionLocal()
-    try:
-        cameras = (
-            db.query(models.Camera)
-            .join(models.User, models.Camera.owner_user_id == models.User.id)
-            .join(models.WebhookEndpoint, models.Camera.webhook_endpoint_id == models.WebhookEndpoint.id)
-            .filter(
-                models.Camera.is_active == True,      # noqa: E712
-                models.User.is_suspended == False,     # noqa: E712
-                models.WebhookEndpoint.is_active == True,
-            )
-            .all()
-        )
-        return {
-            c.id: {
-                "rtsp_url": c.rtsp_url,
-                "delay": c.delay if c.delay is not None else 1,
-            }
-            for c in cameras
-        }
-    finally:
-        db.close()
+    """คืน {camera_id: {"rtsp_url": ..., "delay": ...}} เฉพาะกล้องที่ is_active=True และเจ้าของยังไม่ถูกระงับ
+    (query จริงอยู่ใน camera/db.py — ไม่ใช้ smartlpr.models ของ backend แล้ว เพราะแยกเป็นคนละโปรเจค)"""
+    return fetch_active_cameras()
 
 
 def _run_inference_worker(frame_queue: mp.Queue, stop_event: mp.Event) -> None:

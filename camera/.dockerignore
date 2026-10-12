@@ -1,0 +1,15 @@
+# ไฟล์ที่ไม่ต้องส่งเข้าไปตอน build image ของ camera
+# หมายเหตุ: app/models (ไฟล์โมเดล AI) "ต้อง" ถูกส่งเข้าไป — ใช้เติม volume smartlpr_model_data ครั้งแรก
+.env
+.env.*
+!.env.example
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+.venv/
+venv/
+app/captures/
+app/logs/
+docker-compose.yml
+Dockerfile
+.dockerignore
