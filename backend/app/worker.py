@@ -234,6 +234,46 @@ async def _notify_endpoints_tripped(db: AsyncSession, tripped_endpoints: dict) -
             logging.error(f"ส่งอีเมลแจ้งเตือน endpoint ตัดไฟ (id={endpoint.id}) ไม่สำเร็จ: {e}")
 
 
+# ---------------------------------------------------------------------------
+# [Webhook Bell] ส่ง webhook ทันทีที่มี event ใหม่ แทนการเปิดเช็ค DB ทุก 1 วินาที
+#
+# เดิม: scheduler เรียก process_webhook_queue ทุก 1 วินาที (เหมือนพนักงานเดินไปเปิดตู้จดหมายทุกวินาที
+#       ส่วนใหญ่ตู้ว่าง) ปัญหาคือ event ใหม่ต้องรอรอบถัดไปได้ถึง 1 วิ และถ้ารอบไหนช้า (ปลายทางค้าง
+#       timeout 10 วิ) APScheduler จะ "ข้าม" รอบถัดๆ ไปทั้งหมด (max_instances=1) ไม่มีใครมาส่งต่อ
+# ใหม่: ติด "กริ่ง" (asyncio.Event) ไว้ — POST /capture-event บันทึก event ลง DB เสร็จแล้วกดกริ่ง
+#       (ring_webhook_bell) webhook_loop ที่นั่งรอกริ่งอยู่จะตื่นมาส่งทันที ระหว่างรอไม่แตะ DB เลย
+#       และถ้าไม่มีใครกดกริ่งภายใน WEBHOOK_SWEEP_SECONDS ก็ตื่นมาเช็คเองหนึ่งรอบ เพื่อเก็บงานที่ไม่มีใคร
+#       กดกริ่งให้: event ที่รอ retry (3/5/10 นาที) และ event ที่ค้างอยู่ใน DB ตอน backend restart
+# ถ้ากริ่งดังระหว่างกำลังส่งรอบก่อนอยู่ กริ่งจะค้างสถานะ "ดังแล้ว" ไว้ พอรอบนั้นจบ ลูปจะวนกลับมาส่งต่อทันที
+# (ไม่มี event หลุด เพราะกดกริ่ง "หลัง" commit ลง DB แล้วเสมอ)
+#
+# ข้อจำกัดที่ยังเหลือ: ส่งทีละ "ชุด" เหมือนเดิม — ถ้าชุดก่อนมีปลายทางค้าง event ใหม่ต้องรอชุดนั้นจบก่อน
+# (สูงสุดราว 10 วิ ตาม timeout) แต่ไม่ถูกข้ามแล้ว
+# ---------------------------------------------------------------------------
+WEBHOOK_SWEEP_SECONDS = 10
+_webhook_bell = asyncio.Event()
+
+
+def ring_webhook_bell() -> None:
+    """กดกริ่ง: เรียกหลังบันทึก event ใหม่ (หรือรีเซ็ต event เดิมกลับเป็น pending) ลง DB สำเร็จแล้วเท่านั้น"""
+    _webhook_bell.set()
+
+
+async def webhook_loop() -> None:
+    """ลูปส่ง webhook — main.py สร้างเป็น background task ตอนเปิดระบบ และ cancel ตอนปิดระบบ"""
+    while True:
+        try:
+            await asyncio.wait_for(_webhook_bell.wait(), timeout=WEBHOOK_SWEEP_SECONDS)
+        except asyncio.TimeoutError:
+            pass  # ครบเวลาแล้วไม่มีใครกดกริ่ง -> เช็คเองหนึ่งรอบ (เก็บงาน retry)
+        _webhook_bell.clear()
+        try:
+            await process_webhook_queue()
+        except Exception as e:
+            # process_webhook_queue จับ error ของตัวเองอยู่แล้ว ชั้นนี้กันไว้อีกชั้นไม่ให้ลูปตายเงียบๆ
+            logging.error(f"webhook_loop ทำงานผิดพลาด: {e}")
+
+
 async def process_webhook_queue():
     """
     Job A — realtime: event ใหม่ + event ที่กำลัง retry ปกติเท่านั้น (status pending/failed)
@@ -781,7 +821,7 @@ async def resume_endpoint_now(endpoint_id: int) -> None:
 
 def start_scheduler():
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(process_webhook_queue, 'interval', seconds=1)
+    # process_webhook_queue ไม่อยู่ใน scheduler แล้ว — ย้ายไปเป็น webhook_loop (กริ่ง) ดูด้านบน
     scheduler.add_job(process_graveyard_resume, 'interval', minutes=30)
     scheduler.add_job(verify_pending_cameras, 'interval', seconds=20)
     scheduler.add_job(cleanup_orphaned_cameras_job, 'interval', hours=24)

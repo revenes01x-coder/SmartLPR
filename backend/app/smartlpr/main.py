@@ -1,8 +1,9 @@
+import asyncio
 import logging
 from fastapi import FastAPI, Depends, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -10,7 +11,7 @@ from datetime import datetime, timezone
 from smartlpr import models
 from smartlpr.database import engine, get_db, SessionLocal
 from routers import auth, webhook, terms, admin, access_request, my_cameras, api_key, partner, contact, my_contacts
-from worker import start_scheduler
+from worker import start_scheduler, webhook_loop, ring_webhook_bell
 from services.camera_storage import prune_orphaned_camera_storage
 import os
 from smartlpr.config import CAPTURES_SAVE_DIR
@@ -67,8 +68,13 @@ async def lifespan(app: FastAPI):
     await _cleanup_orphaned_camera_storage()
     await _cleanup_orphaned_events()
     scheduler = start_scheduler()
+    # [Webhook Bell]: ลูปส่ง webhook รอกริ่งจาก /capture-event (ดู worker.webhook_loop)
+    webhook_task = asyncio.create_task(webhook_loop())
     yield
     print(" กำลังปิดระบบและหยุดการทำงานของ Worker...")
+    webhook_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await webhook_task
     scheduler.shutdown()
 
 ROOT_PATH = os.getenv("ROOT_PATH", "/api")
@@ -188,6 +194,7 @@ async def receive_from_rtsp(
             existing_event.attempt_count = 0
             existing_event.next_retry_at = datetime.now(timezone.utc)
             await db.commit()
+            ring_webhook_bell()  # กดกริ่ง: ส่งข้อมูลที่อัปเดตแล้วทันที
             return {"status": "updated", "message": "อัปเดตข้อมูลป้ายทะเบียนเรียบร้อย"}
 
     # 4. หา WebhookEndpoint ที่กล้องตัวนี้ผูกไว้
@@ -226,6 +233,7 @@ async def receive_from_rtsp(
         await db.rollback()
         return {"status": "ignored", "message": "event_id นี้เคยถูกบันทึกไปแล้ว"}
 
+    ring_webhook_bell()  # กดกริ่ง: บันทึกลง DB แล้ว ให้ webhook_loop ส่งต่อให้ลูกค้าทันที
     return {"status": "success", "message": "เพิ่มข้อมูลลงคิวเรียบร้อย Worker จะจัดการส่งต่อให้ทันที"}
 
 
