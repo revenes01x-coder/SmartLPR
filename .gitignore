@@ -57,5 +57,3 @@ htmlcov/
 add_camera.py
 add_webhook.py
 
-# ---- ผลการ train โมเดล (โมเดลใหม่, log, กราฟ) ----
-training/outputs/

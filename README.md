@@ -71,8 +71,7 @@ SmartLPR/
 │   └── docker-compose.yml
 ├── scripts/setup-networks.sh สร้าง network กลาง (รันซ้ำได้)
 ├── docker-compose.yml        ไฟล์รวมสำหรับ VM: include ทั้ง 3 โปรเจค = 4 คอนเทนเนอร์
-├── captures/  logs/          ข้อมูลตอนรัน ใช้ร่วมกันระหว่าง backend กับ camera (ไม่อยู่ใน git)
-└── training/                 สคริปต์ train โมเดล (ใช้บนเครื่องผู้พัฒนาเท่านั้น)
+└── captures/  logs/          ข้อมูลตอนรัน ใช้ร่วมกันระหว่าง backend กับ camera (ไม่อยู่ใน git)
 ```
 
 **ทำไม camera มี `db.py` ของตัวเอง:** camera ใช้ฐานข้อมูลแค่ query เดียว (รายชื่อกล้องที่ต้องเฝ้า) จึงเขียน SQL ไว้ในไฟล์เล็กๆ ไฟล์เดียว แทนการ copy `models.py` ทั้งไฟล์ของ backend มา backend จะแก้ตารางอื่นยังไงก็ไม่กระทบ camera ต้องแก้ `camera/app/camera/db.py` ตามก็ต่อเมื่อเปลี่ยนชื่อคอลัมน์ที่ query นี้ใช้เท่านั้น
@@ -80,7 +79,7 @@ SmartLPR/
 ## สิ่งที่ต้องมีก่อนติดตั้ง
 
 - Docker และ Docker Compose v2.20 ขึ้นไป (ไฟล์รวมใช้ `include`)
-- ไฟล์โมเดล AI (ไม่อยู่ใน git เพราะไฟล์ใหญ่ ต้องขอจากผู้ดูแลโปรเจกต์ หรือ train เองด้วยสคริปต์ใน `training/`) วางตามโครงสร้างนี้
+- ไฟล์โมเดล AI (ไม่อยู่ใน git เพราะไฟล์ใหญ่ ต้องขอจากผู้ดูแลโปรเจกต์ หรือ train เองด้วยชุดสคริปต์ training ที่แยกส่งต่างหาก) วางตามโครงสร้างนี้
 
   ```
   camera/app/models/
@@ -265,13 +264,7 @@ backend รันงานเหล่านี้อัตโนมัติ (�
 
 ## การ train โมเดล
 
-โฟลเดอร์ `training/` เก็บโค้ดที่ใช้สร้างโมเดลทั้ง 3 ตัวของระบบ (YOLO หาป้าย, OCR อ่านป้าย, แยกสีรถ) ใช้บนเครื่องของผู้พัฒนาเท่านั้น ไม่ถูกใส่เข้า Docker image
-
-- ติดตั้ง library: `pip install -r training/requirements-train.txt`
-- dataset ไม่อยู่ใน git ตั้งตำแหน่งได้ที่ `training/train_config.py` หรือ environment variable `SMARTLPR_DATA_ROOT`
-- ผลการ train ไปอยู่ที่ `training/outputs/` (ไม่ขึ้น git) จะไม่ไปทับโมเดลใน `camera/app/models/` เอง
-
-ขั้นตอนละเอียดของแต่ละโมเดลอยู่ใน [`training/README.md`](training/README.md)
+สคริปต์สร้าง dataset และ train โมเดลทั้ง 3 ตัว (YOLO หาป้าย, OCR อ่านป้าย, แยกสีรถ) แยกออกจาก repo นี้แล้ว ส่งเป็นชุดต่างหาก โมเดลที่ train เสร็จให้นำมาวางที่ `camera/app/models/` (ดู "สิ่งที่ต้องมีก่อนติดตั้ง") แล้วลบ volume `smartlpr_model_data` ก่อน build ใหม่
 
 ## การ deploy
 
