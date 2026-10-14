@@ -22,7 +22,7 @@ DEAD_LETTER_THRESHOLD = 3
 
 # เพดานการยิง webhook พร้อมกัน "ต่อ 1 endpoint" (แต่ละ endpoint มี Semaphore ของตัวเอง) — กันเซิร์ฟเวอร์
 # ลูกค้ารายเดียวโดนถล่ม และกัน endpoint ที่มี event เยอะบังคิว endpoint อื่น
-# หมายเหตุ: ไม่มีเพดานรวมข้าม endpoint — จำนวนที่ยิงพร้อมกันทั้งหมด = จำนวน endpoint ที่มี event × ค่านี้
+# ตัวส่งปกติมีเพดานรวมทั้งระบบอีกชั้น (WEBHOOK_MAX_IN_FLIGHT ด้านล่าง) ส่วน graveyard ใช้ RESUME_PER_ENDPOINT_CONCURRENCY
 REALTIME_PER_ENDPOINT_CONCURRENCY = 5
 RESUME_PER_ENDPOINT_CONCURRENCY = 3
 
@@ -60,8 +60,7 @@ def _is_valid_ack(event: models.WebhookEvent, response: httpx.Response) -> bool:
 
 def _read_event_images(event: models.WebhookEvent) -> dict:
     """อ่านไฟล์รูป full/crop แบบ sync (blocking disk I/O) — เรียกผ่าน asyncio.to_thread เท่านั้น
-    ไม่ให้ blocking I/O นี้ไปแช่ event loop ตอนมีหลาย event ยิงพร้อมกัน (REALTIME_PER_ENDPOINT_CONCURRENCY /
-    RESUME_PER_ENDPOINT_CONCURRENCY ต่อ endpoint ผ่าน asyncio.gather)"""
+    ไม่ให้ blocking I/O นี้ไปแช่ event loop ตอนมีหลาย event ยิงพร้อมกัน"""
     with open(event.full_image_path, "rb") as f_full, \
          open(event.crop_image_path, "rb") as f_crop:
         return {
@@ -134,8 +133,8 @@ def _build_endpoint_semaphores(events, per_endpoint_limit: int) -> dict:
 
 async def _get_suspended_user_ids(db: AsyncSession, user_ids: set) -> set:
     """คืน set ของ user_id ที่ is_suspended=True ในกลุ่ม user_ids ที่ให้มา (query ครั้งเดียว
-    ต่อรอบ ไม่ query ทีละ event) ใช้ร่วมกันทั้ง process_webhook_queue และ process_graveyard_resume
-    เพื่อกัน event ของ user ที่ถูกระงับไม่ให้ถูกส่งออกไปจริง"""
+    ต่อรอบ ไม่ query ทีละ event) ใช้ใน process_graveyard_resume เพื่อกัน event ของ user ที่ถูกระงับ
+    ไม่ให้ถูกส่งออกไปจริง (ตัวส่งปกติกรองเรื่องนี้ใน SQL ตอนจองงานเลย ดู _claim_due_events)"""
     if not user_ids:
         return set()
     result = await db.execute(
@@ -147,111 +146,130 @@ async def _get_suspended_user_ids(db: AsyncSession, user_ids: set) -> set:
     return {uid for (uid,) in result.all()}
 
 
-def _mark_endpoint_outcome(endpoint: models.WebhookEndpoint, success: bool) -> bool:
+async def _record_endpoint_outcome(db: AsyncSession, endpoint_id: str, success: bool) -> int | None:
     """
-    Circuit breaker bookkeeping (แค่แก้ attribute เฉยๆ ไม่ commit ในนี้) — ไม่แตะ DB โดยตรง
-    เลย เป็นแค่ pure logic บน object ที่โหลดมาแล้ว จึงยังเป็น sync function ได้ตามเดิม:
-    - success -> ล้าง streak dead_letter ทิ้ง (มี event ผ่านคั่นกลาง นับ streak ใหม่)
-    - ไม่ success (ตกสุสาน) -> เพิ่ม streak ติดกัน ครบ threshold -> ตัดไฟ (is_healthy=False)
-    คืนค่า True ถ้าการเรียกครั้งนี้เป็นตัวที่ทำให้เพิ่งตัดไฟ (healthy -> unhealthy) พอดี
+    Circuit breaker bookkeeping แบบให้ DB นับเอง — ใช้ร่วมกันทั้งตัวส่งปกติและ graveyard
+    ทำไมต้องให้ DB นับ: ตอนนี้ event ของ endpoint เดียวกันหลายตัวส่งพร้อมกันคนละ task ถ้าอ่านค่ามาบวกใน Python
+    แล้วเขียนกลับ สองงานอาจอ่านได้ 1 พร้อมกันแล้วเขียน 2 ทั้งคู่ (นับหายไป 1) จึงสั่ง SET x = x + 1 ให้ DB บวกให้ทีละครั้ง
+    - success -> ล้าง streak dead_letter (มี event ผ่านคั่นกลาง เริ่มนับใหม่)
+    - ตกสุสาน -> streak + 1 ครบ DEAD_LETTER_THRESHOLD -> ตัดไฟ (is_healthy=False)
+    คืนจำนวน dead letter ติดกัน ถ้าการเรียกครั้งนี้เป็นตัวที่ "เพิ่งตัดไฟ" พอดี (ไม่ใช่ คืน None)
+    ไม่ commit ในนี้ caller เป็นคน commit
     """
+    endpoint_t = models.WebhookEndpoint
     if success:
-        endpoint.consecutive_dead_letters = 0
-        return False
-
-    was_healthy = endpoint.is_healthy
-    endpoint.consecutive_dead_letters += 1
-    if endpoint.consecutive_dead_letters >= DEAD_LETTER_THRESHOLD:
-        endpoint.is_healthy = False
-        return was_healthy and not endpoint.is_healthy  # เพิ่งเปลี่ยนจาก True -> False ตอนนี้เลย
-    return False
-
-
-def _apply_send_result(event, endpoint, result_type, error_msg):
-    """คืน endpoint ที่ "เพิ่งถูกตัดไฟ" จากการเรียกครั้งนี้ (หรือ None ถ้าไม่มี) ให้ caller เอาไปส่งอีเมลแจ้ง user
-    (แก้ attribute ของ object ที่โหลดมาแล้วเฉยๆ ไม่ query/commit เอง ยังเป็น sync ได้)"""
-    now = datetime.now(timezone.utc)
-    just_tripped_endpoint = None
-
-    if result_type == "success":
-        event.status = "success"
-        if endpoint:
-            _mark_endpoint_outcome(endpoint, success=True)
-
-    elif result_type == "file_not_found":
-        logging.warning(f"ไม่พบไฟล์รูปของ Event ID: {event.id} | {error_msg}")
-        event.attempt_count += 1
-        event.status = "dead_letter"
-        event.next_retry_at = None
-        if endpoint:
-            if _mark_endpoint_outcome(endpoint, success=False):
-                just_tripped_endpoint = endpoint
-
-    else:
-        # ครอบคลุมทั้ง http_error, ack_mismatch, ssrf_blocked, error ธรรมดา — เข้า retry logic เดียวกันหมด
-        logging.warning(f"ส่งข้อมูลไม่สำเร็จ Event ID: {event.id} | ประเภท: {result_type} | Error: {error_msg}")
-        event.attempt_count += 1
-
-        if event.attempt_count > 3:
-            event.status = "dead_letter"
-            event.next_retry_at = None
-            if endpoint:
-                if _mark_endpoint_outcome(endpoint, success=False):
-                    just_tripped_endpoint = endpoint
-        else:
-            event.status = "failed"
-            delay_minutes = RETRY_DELAYS.get(event.attempt_count, 10)
-            event.next_retry_at = now + timedelta(minutes=delay_minutes)
-
-    return just_tripped_endpoint
-
-
-def _log_endpoints_tripped(db: AsyncSession, tripped_endpoints: dict) -> None:
-
-    for endpoint in tripped_endpoints.values():
-        log_admin_action(
-            db, None,
-            action="webhook.auto_disable",
-            target_type="webhook_endpoint",
-            target_id=endpoint.id,
-            detail={
-                "url": endpoint.url,
-                "consecutive_dead_letters": endpoint.consecutive_dead_letters,
-            },
-            actor_type="system",
+        await db.execute(
+            update(endpoint_t)
+            .where(endpoint_t.id == endpoint_id, endpoint_t.consecutive_dead_letters != 0)
+            .values(consecutive_dead_letters=0)
+            .execution_options(synchronize_session=False)
         )
+        return None
+
+    count = (await db.execute(
+        update(endpoint_t)
+        .where(endpoint_t.id == endpoint_id)
+        .values(consecutive_dead_letters=endpoint_t.consecutive_dead_letters + 1)
+        .returning(endpoint_t.consecutive_dead_letters)
+        .execution_options(synchronize_session=False)
+    )).scalar_one_or_none()
+    if count is None or count < DEAD_LETTER_THRESHOLD:
+        return None
+
+    # WHERE is_healthy = TRUE: ถ้าหลายงานครบ threshold พร้อมกัน จะมีแค่งานเดียวที่เปลี่ยนได้ -> แจ้งเตือนครั้งเดียว
+    just_tripped = (await db.execute(
+        update(endpoint_t)
+        .where(endpoint_t.id == endpoint_id, endpoint_t.is_healthy.is_(True))
+        .values(is_healthy=False)
+        .returning(endpoint_t.id)
+        .execution_options(synchronize_session=False)
+    )).scalar_one_or_none()
+    return count if just_tripped is not None else None
 
 
-async def _notify_endpoints_tripped(db: AsyncSession, tripped_endpoints: dict) -> None:
-    for endpoint in tripped_endpoints.values():
-        result = await db.execute(select(models.User).filter(models.User.id == endpoint.user_id))
-        owner = result.scalar_one_or_none()
-        if not owner:
-            continue
-        try:
-            await asyncio.to_thread(send_webhook_endpoint_unhealthy_email, owner.email, endpoint.url)
-        except RuntimeError as e:
-            logging.error(f"ส่งอีเมลแจ้งเตือน endpoint ตัดไฟ (id={endpoint.id}) ไม่สำเร็จ: {e}")
+async def _log_endpoint_tripped(db: AsyncSession, endpoint_id: str, consecutive_dead_letters: int) -> None:
+    """เพิ่ม audit log ว่าระบบตัดไฟ endpoint นี้อัตโนมัติ (db.add เฉยๆ caller commit พร้อมการเปลี่ยนแปลงหลัก)"""
+    url = (await db.execute(
+        select(models.WebhookEndpoint.url).filter(models.WebhookEndpoint.id == endpoint_id)
+    )).scalar_one_or_none()
+    log_admin_action(
+        db, None,
+        action="webhook.auto_disable",
+        target_type="webhook_endpoint",
+        target_id=endpoint_id,
+        detail={
+            "url": url,
+            "consecutive_dead_letters": consecutive_dead_letters,
+        },
+        actor_type="system",
+    )
+
+
+async def _notify_endpoint_tripped(db: AsyncSession, endpoint_id: str) -> None:
+    """ส่งอีเมลแจ้งเจ้าของว่า endpoint ถูกตัดไฟ — เรียกหลัง commit แล้วเท่านั้น"""
+    row = (await db.execute(
+        select(models.User.email, models.WebhookEndpoint.url)
+        .join(models.User, models.User.id == models.WebhookEndpoint.user_id)
+        .filter(models.WebhookEndpoint.id == endpoint_id)
+    )).first()
+    if not row:
+        return
+    try:
+        await asyncio.to_thread(send_webhook_endpoint_unhealthy_email, row.email, row.url)
+    except RuntimeError as e:
+        logging.error(f"ส่งอีเมลแจ้งเตือน endpoint ตัดไฟ (id={endpoint_id}) ไม่สำเร็จ: {e}")
+
+
+def _next_event_state(event: models.WebhookEvent, result_type: str, error_msg: str | None):
+    """คำนวณสถานะถัดไปของ event จากผลการส่ง (ไม่แตะ DB) คืน (status, attempt_count, next_retry_at)
+    กติกาเหมือนเดิมทุกอย่าง: สำเร็จ -> success / ไม่พบไฟล์รูป -> dead_letter ทันที /
+    ส่งไม่ผ่าน -> นัดลองใหม่อีก 3, 5, 10 นาที ครบแล้วยังไม่ผ่าน -> dead_letter"""
+    if result_type == "success":
+        return "success", event.attempt_count, None
+
+    attempts = (event.attempt_count or 0) + 1
+    if result_type == "file_not_found":
+        logging.warning(f"ไม่พบไฟล์รูปของ Event ID: {event.id} | {error_msg}")
+        return "dead_letter", attempts, None
+
+    # ครอบคลุมทั้ง http_error, ack_mismatch, ssrf_blocked, error ธรรมดา — เข้า retry logic เดียวกันหมด
+    logging.warning(f"ส่งข้อมูลไม่สำเร็จ Event ID: {event.id} | ประเภท: {result_type} | Error: {error_msg}")
+    if attempts > 3:
+        return "dead_letter", attempts, None
+    delay_minutes = RETRY_DELAYS.get(attempts, 10)
+    return "failed", attempts, datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
 
 
 # ---------------------------------------------------------------------------
-# [Webhook Bell] ส่ง webhook ทันทีที่มี event ใหม่ แทนการเปิดเช็ค DB ทุก 1 วินาที
+# [Webhook Sender] ส่ง webhook ทันที และแยกส่งทีละ event ไม่ต้องรอกัน
 #
-# เดิม: scheduler เรียก process_webhook_queue ทุก 1 วินาที (เหมือนพนักงานเดินไปเปิดตู้จดหมายทุกวินาที
-#       ส่วนใหญ่ตู้ว่าง) ปัญหาคือ event ใหม่ต้องรอรอบถัดไปได้ถึง 1 วิ และถ้ารอบไหนช้า (ปลายทางค้าง
-#       timeout 10 วิ) APScheduler จะ "ข้าม" รอบถัดๆ ไปทั้งหมด (max_instances=1) ไม่มีใครมาส่งต่อ
-# ใหม่: ติด "กริ่ง" (asyncio.Event) ไว้ — POST /capture-event บันทึก event ลง DB เสร็จแล้วกดกริ่ง
-#       (ring_webhook_bell) webhook_loop ที่นั่งรอกริ่งอยู่จะตื่นมาส่งทันที ระหว่างรอไม่แตะ DB เลย
-#       และถ้าไม่มีใครกดกริ่งภายใน WEBHOOK_SWEEP_SECONDS ก็ตื่นมาเช็คเองหนึ่งรอบ เพื่อเก็บงานที่ไม่มีใคร
-#       กดกริ่งให้: event ที่รอ retry (3/5/10 นาที) และ event ที่ค้างอยู่ใน DB ตอน backend restart
-# ถ้ากริ่งดังระหว่างกำลังส่งรอบก่อนอยู่ กริ่งจะค้างสถานะ "ดังแล้ว" ไว้ พอรอบนั้นจบ ลูปจะวนกลับมาส่งต่อทันที
-# (ไม่มี event หลุด เพราะกดกริ่ง "หลัง" commit ลง DB แล้วเสมอ)
+# กริ่ง (เหมือนเดิม): POST /capture-event บันทึก event ลง DB เสร็จแล้วกดกริ่ง (ring_webhook_bell)
+#   webhook_loop ตื่นมาทำงานทันที ระหว่างรอไม่แตะ DB และถ้าไม่มีใครกดกริ่งภายใน WEBHOOK_SWEEP_SECONDS
+#   ก็ตื่นมาเช็คเองหนึ่งรอบ เพื่อเก็บงานที่ไม่มีใครกดกริ่งให้: งาน retry (3/5/10 นาที) และงานที่ค้างตอน restart
 #
-# ข้อจำกัดที่ยังเหลือ: ส่งทีละ "ชุด" เหมือนเดิม — ถ้าชุดก่อนมีปลายทางค้าง event ใหม่ต้องรอชุดนั้นจบก่อน
-# (สูงสุดราว 10 วิ ตาม timeout) แต่ไม่ถูกข้ามแล้ว
+# เดิม: หยิบทั้งชุดแล้วรอให้ส่งครบทั้งชุดก่อนค่อยหยิบชุดใหม่ ปลายทางรายเดียวค้าง event ใหม่ของทุกรายต้องรอด้วย
+# ใหม่: "จองงานใน DB แล้วแยกส่งทีละ event"
+#   1. จอง (_claim_due_events): เลือก event ที่ถึงเวลาส่งด้วย SELECT ... FOR UPDATE SKIP LOCKED แล้วเลื่อน
+#      next_retry_at ออกไป WEBHOOK_LEASE_SECONDS เป็น "ใบจอง" — รอบถัดไปจึงมองไม่เห็นงานนี้ (ไม่หยิบซ้ำ)
+#      ถ้า backend ล่มกลางทาง พอใบจองหมดอายุ งานจะกลับมาให้ส่งใหม่เอง
+#      SKIP LOCKED: ถ้ามี backend หลายตัวจองพร้อมกัน แถวที่ตัวอื่นล็อกอยู่จะถูกข้าม ไม่ได้แถวเดียวกัน
+#   2. ส่ง (_deliver_one): แต่ละ event ได้ task ของตัวเอง ลูปไม่รอให้ส่งเสร็จ กลับไปรอกริ่งทันที
+#   3. บันทึกผล (_save_delivery_result): เขียนผลเฉพาะเมื่อ next_retry_at ยังเป็นใบจองของเรา
+#      ถ้าระหว่างส่งมี is_update เข้ามา (ตั้ง pending + เวลานัดเป็น "ตอนนี้") จะไม่เขียนทับ
+#      event จึงยังเป็น pending พร้อมข้อมูลใหม่ และถูกส่งตามไปทันทีที่งานเดิมจบ
+#
+# เพดาน: ส่งพร้อมกันไม่เกิน REALTIME_PER_ENDPOINT_CONCURRENCY ต่อ endpoint และ WEBHOOK_MAX_IN_FLIGHT ทั้งระบบ
+#   จองเท่าที่ส่งได้ทันทีเท่านั้น งานจะได้ไม่ต้องไปนั่งรอคิวจนใบจองหมดอายุ
+# ข้อจำกัด: กริ่งดังได้แค่ใน process เดียว ถ้ามี backend หลายตัว ตัวอื่นจะเห็นงานใหม่ตอนรอบเช็คเอง (ไม่เกิน 10 วิ)
 # ---------------------------------------------------------------------------
 WEBHOOK_SWEEP_SECONDS = 10
+WEBHOOK_SEND_TOTAL_TIMEOUT_SECONDS = 30   # เวลารวมสูงสุดต่อการส่ง 1 ครั้ง (timeout=10 ของ httpx นับแยกทีละช่วง)
+WEBHOOK_LEASE_SECONDS = 60                # อายุใบจอง ต้องนานกว่า WEBHOOK_SEND_TOTAL_TIMEOUT_SECONDS เสมอ
+WEBHOOK_MAX_IN_FLIGHT = 50                # ส่งพร้อมกันสูงสุดทั้งระบบ
+
 _webhook_bell = asyncio.Event()
+_in_flight: dict[str, asyncio.Task] = {}             # event.id -> task ที่กำลังส่ง
+_in_flight_per_endpoint: dict[str | None, int] = {}  # webhook_endpoint_id -> จำนวนที่กำลังส่ง
 
 
 def ring_webhook_bell() -> None:
@@ -261,104 +279,183 @@ def ring_webhook_bell() -> None:
 
 async def webhook_loop() -> None:
     """ลูปส่ง webhook — main.py สร้างเป็น background task ตอนเปิดระบบ และ cancel ตอนปิดระบบ"""
+    async with httpx.AsyncClient() as client:
+        try:
+            while True:
+                try:
+                    await asyncio.wait_for(_webhook_bell.wait(), timeout=WEBHOOK_SWEEP_SECONDS)
+                except asyncio.TimeoutError:
+                    pass  # ครบเวลาแล้วไม่มีใครกดกริ่ง -> เช็คเองหนึ่งรอบ (เก็บงาน retry)
+                _webhook_bell.clear()
+                try:
+                    await _dispatch_due_events(client)
+                except Exception as e:
+                    # กันไว้ไม่ให้ลูปตายเงียบๆ (เช่น DB หลุดชั่วคราว) รอบหน้าค่อยลองใหม่
+                    logging.error(f"webhook_loop ทำงานผิดพลาด: {e}")
+        finally:
+            await _cancel_in_flight()
+
+
+async def _cancel_in_flight() -> None:
+    """ตอนปิดระบบ: ยกเลิกงานที่กำลังส่งค้างอยู่ ใบจองใน DB ยังอยู่ พอหมดอายุ (WEBHOOK_LEASE_SECONDS)
+    backend ที่เปิดขึ้นมาใหม่จะหยิบไปส่งต่อเอง (ถ้ารอบที่ถูกยกเลิกส่งถึงลูกค้าไปแล้ว ลูกค้าจะได้ซ้ำ กันด้วย event_id)"""
+    tasks = list(_in_flight.values())
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _dispatch_due_events(client: httpx.AsyncClient) -> None:
+    """จองงานที่ถึงเวลาส่ง แล้วปล่อยแต่ละ event ไปส่งใน task ของตัวเอง
+    วนจองจนกว่าจะไม่มีงานเหลือ หรือเต็มเพดาน (เต็มแล้ว งานที่ส่งเสร็จจะกดกริ่งเรียกรอบใหม่เอง)"""
     while True:
-        try:
-            await asyncio.wait_for(_webhook_bell.wait(), timeout=WEBHOOK_SWEEP_SECONDS)
-        except asyncio.TimeoutError:
-            pass  # ครบเวลาแล้วไม่มีใครกดกริ่ง -> เช็คเองหนึ่งรอบ (เก็บงาน retry)
-        _webhook_bell.clear()
-        try:
-            await process_webhook_queue()
-        except Exception as e:
-            # process_webhook_queue จับ error ของตัวเองอยู่แล้ว ชั้นนี้กันไว้อีกชั้นไม่ให้ลูปตายเงียบๆ
-            logging.error(f"webhook_loop ทำงานผิดพลาด: {e}")
-
-
-async def process_webhook_queue():
-    """
-    Job A — realtime: event ใหม่ + event ที่กำลัง retry ปกติเท่านั้น (status pending/failed)
-    ไม่แตะ dead_letter เลย นั่นเป็นหน้าที่ของ Job B (process_graveyard_resume) โดยเฉพาะ
-    ใช้ Semaphore ต่อ endpoint (REALTIME_PER_ENDPOINT_CONCURRENCY) แยกเด็ดขาดจาก Job B ไม่แย่ง concurrency กัน
-    """
-    db: AsyncSession = SessionLocal()
-    try:
-        now = datetime.now(timezone.utc)
-
-        result = await db.execute(
-            select(models.WebhookEvent).filter(
-                models.WebhookEvent.status.in_(["pending", "failed"]),
-                (models.WebhookEvent.next_retry_at <= now) | (models.WebhookEvent.next_retry_at == None),  # noqa: E711
-                models.WebhookEvent.deleted_at.is_(None),
-            )
-        )
-        events = result.scalars().all()
-
-        if not events:
+        free_slots = WEBHOOK_MAX_IN_FLIGHT - len(_in_flight)
+        if free_slots <= 0:
+            return
+        claimed, lease_until, changed = await _claim_due_events(free_slots)
+        for event in claimed:
+            _start_delivery(client, event, lease_until)
+        if not changed:
             return
 
-        endpoint_ids = {e.webhook_endpoint_id for e in events if e.webhook_endpoint_id}
-        endpoints_by_id = {}
-        if endpoint_ids:
-            eps_result = await db.execute(
-                select(models.WebhookEndpoint).filter(models.WebhookEndpoint.id.in_(endpoint_ids))
-            )
-            endpoints_by_id = {ep.id: ep for ep in eps_result.scalars().all()}
 
-        # [Suspend Guard]: หาว่า event ไหนเป็นของ user ที่ถูกระงับอยู่ตอนนี้บ้าง (query ครั้งเดียว)
-        suspended_user_ids = await _get_suspended_user_ids(db, {e.user_id for e in events if e.user_id})
+async def _claim_due_events(limit: int):
+    """
+    จองงาน 1 ชุด คืน (event ที่จองได้, เวลาหมดอายุใบจอง, รอบนี้เปลี่ยนอะไรใน DB ไหม)
+    งานที่ไม่แตะเลย (เหมือนเดิม): endpoint ถูกปิดใช้งาน (is_active=False), เจ้าของถูกระงับ
+    endpoint ถูกตัดไฟอยู่ (is_healthy=False): ไม่ส่งจริง ย้ายเข้า dead_letter ทันที (เหมือนเดิม)
+    """
+    event_t, endpoint_t, user_t = models.WebhookEvent, models.WebhookEndpoint, models.User
+    now = datetime.now(timezone.utc)
+    lease_until = now + timedelta(seconds=WEBHOOK_LEASE_SECONDS)
 
-        # Circuit breaker: endpoint ถูกตัดไฟอยู่ -> ข้าม 3 รอบ retry ไปเลย เข้าสุสานทันที ประหยัดเวลา
-        to_send = []
-        for event in events:
-            if event.user_id in suspended_user_ids:
-                continue
+    query = (
+        select(event_t, endpoint_t.is_healthy)
+        .outerjoin(endpoint_t, endpoint_t.id == event_t.webhook_endpoint_id)
+        .outerjoin(user_t, user_t.id == event_t.user_id)
+        .filter(
+            event_t.status.in_(["pending", "failed"]),
+            or_(event_t.next_retry_at <= now, event_t.next_retry_at.is_(None)),
+            event_t.deleted_at.is_(None),
+            or_(endpoint_t.id.is_(None), endpoint_t.is_active.is_(True)),
+            or_(user_t.id.is_(None), user_t.is_suspended.is_(False)),
+        )
+        .order_by(event_t.created_at)
+        .limit(limit)
+        .with_for_update(of=event_t, skip_locked=True)
+    )
+    # งานที่ process นี้กำลังส่งอยู่ ไม่จองซ้ำ — เช่น is_update เพิ่งรีเซ็ตเวลานัดของ event ที่กำลังส่ง:
+    # รอให้งานเดิมจบก่อนค่อยส่งข้อมูลใหม่ตามไป ลูกค้าจะได้รับเรียงตามลำดับ
+    if _in_flight:
+        query = query.filter(event_t.id.notin_(list(_in_flight)))
+    # endpoint ที่ส่งพร้อมกันเต็มเพดานแล้ว ไม่จองเพิ่ม
+    busy = {ep for ep, n in _in_flight_per_endpoint.items() if n >= REALTIME_PER_ENDPOINT_CONCURRENCY}
+    if None in busy:
+        query = query.filter(event_t.webhook_endpoint_id.is_not(None))
+    busy_ids = [ep for ep in busy if ep is not None]
+    if busy_ids:
+        query = query.filter(or_(event_t.webhook_endpoint_id.is_(None), event_t.webhook_endpoint_id.notin_(busy_ids)))
 
-            endpoint = endpoints_by_id.get(event.webhook_endpoint_id)
-
-            if endpoint and not endpoint.is_active:
-                continue
-
-            if endpoint and not endpoint.is_healthy:
+    claimed = []
+    changed = False
+    taken = dict(_in_flight_per_endpoint)
+    async with SessionLocal() as db:
+        rows = (await db.execute(query)).all()
+        for event, endpoint_healthy in rows:
+            endpoint_id = event.webhook_endpoint_id
+            if endpoint_id is not None and endpoint_healthy is False:
+                # Circuit breaker: endpoint ถูกตัดไฟอยู่ -> ข้าม 3 รอบ retry เข้าสุสานทันที ประหยัดเวลา
                 event.status = "dead_letter"
                 event.next_retry_at = None
+                changed = True
                 logging.info(
-                    f"Event ID: {event.id} ข้ามการส่งจริง เพราะ endpoint id={endpoint.id} "
+                    f"Event ID: {event.id} ข้ามการส่งจริง เพราะ endpoint id={endpoint_id} "
                     f"ถูกตัดไฟอยู่ (is_healthy=False)"
                 )
                 continue
-            to_send.append(event)
+            if taken.get(endpoint_id, 0) >= REALTIME_PER_ENDPOINT_CONCURRENCY:
+                continue  # endpoint นี้เต็มเพดานในชุดนี้แล้ว ไม่จอง ปล่อยไว้ให้ชุดหน้า
+            taken[endpoint_id] = taken.get(endpoint_id, 0) + 1
+            event.next_retry_at = lease_until  # ใบจอง
+            claimed.append(event)
+            changed = True
+        await db.commit()
+    return claimed, lease_until, changed
 
-        tripped_endpoints = {}  # endpoint.id -> endpoint, กันแจ้งซ้ำถ้าหลาย event ตัดไฟ endpoint เดียวกันพร้อมกัน
 
-        if to_send:
-            endpoint_semaphores = _build_endpoint_semaphores(to_send, REALTIME_PER_ENDPOINT_CONCURRENCY)
-            async with httpx.AsyncClient() as client:
-                results = await asyncio.gather(
-                    *(
-                        _send_with_semaphore(endpoint_semaphores[event.webhook_endpoint_id], client, event)
-                        for event in to_send
-                    )
-                )
+def _start_delivery(client: httpx.AsyncClient, event: models.WebhookEvent, lease_until: datetime) -> None:
+    endpoint_id = event.webhook_endpoint_id
+    _in_flight_per_endpoint[endpoint_id] = _in_flight_per_endpoint.get(endpoint_id, 0) + 1
+    _in_flight[event.id] = asyncio.create_task(_deliver_one(client, event, lease_until))
 
-            for event, result_type, error_msg in results:
-                endpoint = endpoints_by_id.get(event.webhook_endpoint_id)
-                just_tripped = _apply_send_result(event, endpoint, result_type, error_msg)
-                if just_tripped:
-                    tripped_endpoints[just_tripped.id] = just_tripped
 
-        if tripped_endpoints:
-            _log_endpoints_tripped(db, tripped_endpoints)
+async def _deliver_one(client: httpx.AsyncClient, event: models.WebhookEvent, lease_until: datetime) -> None:
+    """ส่ง event 1 ตัวแล้วบันทึกผล — รันเป็น task ของตัวเอง ไม่มีใครต้องรอใคร"""
+    try:
+        try:
+            result_type, error_msg = await asyncio.wait_for(
+                _send_webhook_request(client, event), timeout=WEBHOOK_SEND_TOTAL_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            result_type, error_msg = "error", f"ส่งไม่เสร็จภายใน {WEBHOOK_SEND_TOTAL_TIMEOUT_SECONDS} วินาที"
+        await _save_delivery_result(event, lease_until, result_type, error_msg)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        # บันทึกผลไม่ได้ (เช่น DB หลุด) ใบจองยังอยู่ หมดอายุแล้ว event จะถูกส่งใหม่เอง
+        logging.error(f"ส่ง/บันทึกผล Event ID: {event.id} ผิดพลาด: {e}")
+    finally:
+        _in_flight.pop(event.id, None)
+        endpoint_id = event.webhook_endpoint_id
+        remaining = _in_flight_per_endpoint.get(endpoint_id, 1) - 1
+        if remaining > 0:
+            _in_flight_per_endpoint[endpoint_id] = remaining
+        else:
+            _in_flight_per_endpoint.pop(endpoint_id, None)
+        # มีที่ว่างเพิ่ม หรือ event นี้อาจถูก is_update ระหว่างส่ง -> ให้ลูปดูว่ามีงานรออยู่ไหม
+        ring_webhook_bell()
 
+
+async def _save_delivery_result(event: models.WebhookEvent, lease_until: datetime,
+                                result_type: str, error_msg: str | None) -> None:
+    status, attempts, next_retry_at = _next_event_state(event, result_type, error_msg)
+    endpoint_id = event.webhook_endpoint_id
+    event_t = models.WebhookEvent
+
+    async with SessionLocal() as db:
+        saved = (await db.execute(
+            update(event_t)
+            .where(
+                event_t.id == event.id,
+                event_t.next_retry_at == lease_until,  # ใบจองยังเป็นของเรา = ไม่มีใครแก้ event นี้ระหว่างส่ง
+                event_t.status.in_(["pending", "failed"]),
+            )
+            .values(status=status, attempt_count=attempts, next_retry_at=next_retry_at)
+            .execution_options(synchronize_session=False)
+        )).rowcount == 1
+        if not saved:
+            logging.info(
+                f"Event ID: {event.id} ถูกเปลี่ยนระหว่างส่ง (เช่นกล้องส่งค่าที่แม่นขึ้นมา) "
+                f"ไม่เขียนผลรอบนี้ทับ — ข้อมูลล่าสุดจะถูกส่งตามไป"
+            )
+
+        tripped_count = None
+        if endpoint_id is not None:
+            if status == "success":
+                await _record_endpoint_outcome(db, endpoint_id, success=True)
+            elif status == "dead_letter" and saved:
+                tripped_count = await _record_endpoint_outcome(db, endpoint_id, success=False)
+        if tripped_count is not None:
+            await _log_endpoint_tripped(db, endpoint_id, tripped_count)
         await db.commit()
 
-        if to_send and tripped_endpoints:
-            await _notify_endpoints_tripped(db, tripped_endpoints)
-
-    except Exception as e:
-        await db.rollback()
-        logging.error(f"Background Worker (realtime) ทำงานผิดพลาด: {e}")
-    finally:
-        await db.close()
+        if tripped_count is not None:
+            try:
+                await _notify_endpoint_tripped(db, endpoint_id)
+            except Exception as e:
+                # ผลการส่งบันทึกไปแล้ว อีเมลพังไม่ควรทำให้ดูเหมือนบันทึกผลไม่สำเร็จ
+                logging.error(f"แจ้งเตือนเจ้าของ endpoint ที่ถูกตัดไฟ (id={endpoint_id}) ไม่สำเร็จ: {e}")
 
 
 async def _ping_endpoint(client: httpx.AsyncClient, url: str) -> bool:
@@ -526,27 +623,28 @@ async def _process_graveyard_resume(endpoint_ids: list[int] | None = None):
             )
 
         endpoints_by_id = {ep.id: ep for ep in reachable_endpoints}
-        tripped_endpoints = {}
+        tripped_counts = {}  # endpoint.id -> จำนวน dead letter ติดกันตอนเพิ่งตัดไฟ
         for event, result_type, error_msg in results:
             endpoint = endpoints_by_id.get(event.webhook_endpoint_id)
             if result_type == "success":
                 event.status = "success"
                 if endpoint:
-                    _mark_endpoint_outcome(endpoint, success=True)
+                    await _record_endpoint_outcome(db, endpoint.id, success=True)
             else:
                 logging.warning(f"Resume ส่งไม่สำเร็จอีกครั้ง Event ID: {event.id} | {result_type} | {error_msg}")
                 event.status = "dead_letter"  # กลับไปสุสาน รอรอบหน้า (อีก 30 นาที)
                 if endpoint:
-                    if _mark_endpoint_outcome(endpoint, success=False):
-                        tripped_endpoints[endpoint.id] = endpoint
+                    count = await _record_endpoint_outcome(db, endpoint.id, success=False)
+                    if count is not None:
+                        tripped_counts[endpoint.id] = count
 
-        if tripped_endpoints:
-            _log_endpoints_tripped(db, tripped_endpoints)
+        for endpoint_id, count in tripped_counts.items():
+            await _log_endpoint_tripped(db, endpoint_id, count)
 
         await db.commit()
 
-        if tripped_endpoints:
-            await _notify_endpoints_tripped(db, tripped_endpoints)
+        for endpoint_id in tripped_counts:
+            await _notify_endpoint_tripped(db, endpoint_id)
 
         logging.info(
             f"[Graveyard Resume] endpoint ที่ฟื้น {len(recovered_endpoints)} ตัว, "
@@ -563,7 +661,7 @@ async def _process_graveyard_resume(endpoint_ids: list[int] | None = None):
 async def _verify_one_camera_rtsp(camera: models.Camera) -> tuple[models.Camera, bool]:
     """เช็ค RTSP กล้องตัวเดียว (ไม่แตะ DB เลย) — คืน (camera, is_ok) ให้ caller เอาไปอัปเดต DB
     เองแบบ sequential ทีหลัง (AsyncSession ตัวเดียวกันเขียนพร้อมกันหลาย coroutine ไม่ได้ —
-    เหตุผลเดียวกับ comment เรื่อง half-async trap ใน _notify_endpoints_tripped ด้านบน)
+    เหตุผลเดียวกับ comment เรื่อง half-async trap ใน _notify_endpoint_tripped ด้านบน)
     ตัว timeout ยังเป็น per-camera เหมือนเดิม (CAMERA_VERIFY_TIMEOUT_SECONDS) — แค่หลายตัว
     รันพร้อมกันได้แล้วผ่าน semaphore ของ caller (_verify_with_semaphore) แทนที่จะรอกันทีละตัว"""
     is_ok = await check_camera_rtsp(camera.rtsp_url, timeout_seconds=CAMERA_VERIFY_TIMEOUT_SECONDS)
@@ -821,7 +919,7 @@ async def resume_endpoint_now(endpoint_id: int) -> None:
 
 def start_scheduler():
     scheduler = AsyncIOScheduler()
-    # process_webhook_queue ไม่อยู่ใน scheduler แล้ว — ย้ายไปเป็น webhook_loop (กริ่ง) ดูด้านบน
+    # ตัวส่ง webhook ปกติไม่อยู่ใน scheduler — อยู่ใน webhook_loop (กริ่ง + จองงาน) ดูด้านบน
     scheduler.add_job(process_graveyard_resume, 'interval', minutes=30)
     scheduler.add_job(verify_pending_cameras, 'interval', seconds=20)
     scheduler.add_job(cleanup_orphaned_cameras_job, 'interval', hours=24)

@@ -23,7 +23,7 @@ async def get_admin_dashboard(
 
     [ทำไม sequential await ไม่ใช้ asyncio.gather]: AsyncSession ตัวเดียวกัน (db จาก
     Depends(get_db)) ยิงหลาย query พร้อมกันแบบ concurrent ไม่ได้ (ไม่ coroutine-safe — เหตุผล
-    เดียวกับที่ worker.py:_notify_endpoints_tripped เคยแก้ half-async trap ไว้) endpoint นี้
+    เดียวกับที่ worker.py:_notify_endpoint_tripped เคยแก้ half-async trap ไว้) endpoint นี้
     เรียกไม่บ่อย (admin เข้ามาดูเป็นครั้งคราว ไม่ใช่ realtime polling) จึงไม่คุ้มไปพยายาม
     optimize รวมเป็น query เดียวที่อ่านยากขึ้นแลกความเร็วที่แทบไม่ต่างกันในทางปฏิบัติ
     """
